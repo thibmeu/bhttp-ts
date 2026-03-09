@@ -125,6 +125,10 @@ export class BHttpStreamDecoder {
 	private _headers = new Headers();
 	private _pendingHeaderName: string | null = null;
 
+	private _shouldContinueProcessing(): boolean {
+		return this._phase !== "done" && this._phase !== "padding";
+	}
+
 	/**
 	 * Push bytes into the decoder and get parsed events.
 	 *
@@ -147,7 +151,8 @@ export class BHttpStreamDecoder {
 		const events: BHttpEvent[] = [];
 
 		// Process as much as possible
-		while (this._phase !== "done" && this._phase !== "padding") {
+		// Note: _processPhase() mutates _phase, so we re-check each iteration
+		while (this._shouldContinueProcessing()) {
 			const event = this._processPhase();
 			if (event === undefined) {
 				break; // Need more data
@@ -581,6 +586,7 @@ export class BHttpStreamDecoder {
 	private _processTrailersIndeterminate(): BHttpTrailersEvent | null | undefined {
 		const saveOffset = this._offset;
 		const trailers = new Headers();
+		let hasTrailers = false;
 
 		while (true) {
 			const lenResult = decodeVli(this._buffer, this._offset);
@@ -606,12 +612,13 @@ export class BHttpStreamDecoder {
 				return undefined;
 			}
 			trailers.set(name, value);
+			hasTrailers = true;
 		}
 
 		this._phase = "padding";
 
-		// Check if there are any trailers
-		if (trailers.entries().next().done) {
+		// Only emit trailers event if there are any
+		if (!hasTrailers) {
 			return null;
 		}
 
