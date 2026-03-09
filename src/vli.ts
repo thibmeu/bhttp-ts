@@ -1,18 +1,13 @@
 /**
- * Variable-Length Integer utilities.
+ * Variable-Length Integer utilities for streaming decode.
  *
- * Re-exports quicvarint and adds streaming decode support.
+ * quicvarint throws on insufficient bytes; this module provides
+ * decodeVli() which returns undefined instead (streaming-friendly).
  */
 
-import {
-	MAX,
-	MIN,
-	decode as quicDecode,
-	encode as quicEncode,
-	length as quicLength,
-} from "quicvarint";
+import { MAX, MIN, encode, length, decode as quicDecode } from "quicvarint";
 
-export { MAX, MIN };
+export { MAX, MIN, encode as encodeVli, length as vliEncodedLength };
 
 /**
  * Result of decoding a VLI.
@@ -23,16 +18,6 @@ export interface VliDecodeResult {
 	/** Number of bytes consumed */
 	readonly bytesRead: number;
 }
-
-/**
- * Calculate the encoded length of a VLI value.
- */
-export const vliEncodedLength = quicLength;
-
-/**
- * Encode a value as a VLI.
- */
-export const encodeVli = quicEncode;
 
 /**
  * Get expected byte length from VLI first byte.
@@ -58,7 +43,6 @@ export function decodeVli(buf: Uint8Array, offset: number): VliDecodeResult | un
 		return undefined;
 	}
 
-	// Create subarray view for quicvarint
 	const slice = buf.subarray(offset, offset + expectedLen);
 	const result = quicDecode(slice);
 

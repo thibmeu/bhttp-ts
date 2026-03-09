@@ -25,7 +25,7 @@
     "jsr:@std/testing@^1.0.9": "1.0.9",
     "jsr:@ts-morph/bootstrap@0.24": "0.24.0",
     "jsr:@ts-morph/common@0.24": "0.24.0",
-    "npm:quicvarint@~0.1.4": "0.1.4"
+    "npm:quicvarint@~0.1.6": "0.1.6"
   },
   "jsr": {
     "@david/code-block-writer@13.0.3": {
@@ -140,8 +140,8 @@
     }
   },
   "npm": {
-    "quicvarint@0.1.4": {
-      "integrity": "sha512-Khpzdux2Ugx6SmD+scyxktiwmZWcWg1t6su1AjZMNgKuoieCQxxbmDReEN1poeKRr25N7mulsBEAb/KdQVhDDQ=="
+    "quicvarint@0.1.6": {
+      "integrity": "sha512-vAe6ziQliSySea3bL1ytUktqVUkJeBxLFCZ3fI/G/QHf5lsZP+fkzqjr/ByC/Ro/7HIb+J11XGhKXFK/TmZltw=="
     }
   },
   "workspace": {
@@ -149,7 +149,7 @@
       "jsr:@deno/dnt@~0.41.3",
       "jsr:@std/assert@1.0.0",
       "jsr:@std/testing@^1.0.9",
-      "npm:quicvarint@~0.1.4"
+      "npm:quicvarint@~0.1.6"
     ]
   }
 }
