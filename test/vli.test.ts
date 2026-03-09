@@ -1,4 +1,4 @@
-import { assertEquals, assertThrows } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import { describe, it } from "@std/testing/bdd";
 
 import { MAX, decodeVli, encodeVli, vliEncodedLength, vliExpectedLength } from "../src/vli.ts";

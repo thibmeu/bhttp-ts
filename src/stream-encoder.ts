@@ -8,7 +8,7 @@
  * - Trailers terminated by 0
  */
 
-import { encodeVli, vliEncodedLength } from "./vli.ts";
+import { encodeVli } from "./vli.ts";
 
 const FRAMING_REQUEST_INDETERMINATE = 2;
 const FRAMING_RESPONSE_INDETERMINATE = 3;
