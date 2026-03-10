@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { describe, it } from "@std/testing/bdd";
 
-import { MAX, decodeVli, encodeVli, vliEncodedLength, vliExpectedLength } from "../src/vli.ts";
+import { MAX, decodeVli, encodeVli, vliEncodedLength } from "../src/vli.ts";
 
 describe("VLI", () => {
 	describe("vliEncodedLength", () => {
@@ -23,15 +23,6 @@ describe("VLI", () => {
 		it("returns 8 for values up to MAX", () => {
 			assertEquals(vliEncodedLength(1073741824), 8);
 			assertEquals(vliEncodedLength(MAX), 8);
-		});
-	});
-
-	describe("vliExpectedLength", () => {
-		it("extracts length from first byte prefix", () => {
-			assertEquals(vliExpectedLength(0b00_000000), 1);
-			assertEquals(vliExpectedLength(0b01_000000), 2);
-			assertEquals(vliExpectedLength(0b10_000000), 4);
-			assertEquals(vliExpectedLength(0b11_000000), 8);
 		});
 	});
 

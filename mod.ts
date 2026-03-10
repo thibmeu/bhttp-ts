@@ -23,6 +23,5 @@ export {
 	encodeVli,
 	decodeVli,
 	vliEncodedLength,
-	vliExpectedLength,
 	type VliDecodeResult,
 } from "./src/vli.ts";

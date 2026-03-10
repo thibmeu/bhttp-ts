@@ -20,14 +20,6 @@ export interface VliDecodeResult {
 }
 
 /**
- * Get expected byte length from VLI first byte.
- */
-export function vliExpectedLength(firstByte: number): number {
-	const prefix = firstByte >> 6;
-	return 1 << prefix; // 0->1, 1->2, 2->4, 3->8
-}
-
-/**
  * Decode a VLI from buffer at offset.
  *
  * Returns undefined if not enough bytes available (enables streaming).
@@ -38,16 +30,10 @@ export function decodeVli(buf: Uint8Array, offset: number): VliDecodeResult | un
 		return undefined;
 	}
 
-	const expectedLen = vliExpectedLength(buf[offset]);
-	if (offset + expectedLen > buf.length) {
+	try {
+		const result = quicDecode(buf.subarray(offset));
+		return { value: result.value, bytesRead: result.usize };
+	} catch {
 		return undefined;
 	}
-
-	const slice = buf.subarray(offset, offset + expectedLen);
-	const result = quicDecode(slice);
-
-	return {
-		value: result.value,
-		bytesRead: result.usize,
-	};
 }
