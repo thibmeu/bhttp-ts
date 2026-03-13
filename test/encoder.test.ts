@@ -1,8 +1,7 @@
-import { assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
+import { describe, expect, it } from "vitest";
 
-import { BHttpEncoder } from "../src/encoder.ts";
-import { BHttpDecoder } from "../src/decoder.ts";
+import { BHttpEncoder } from "../src/encoder";
+import { BHttpDecoder } from "../src/decoder";
 
 describe("BHttpEncoder", () => {
   describe("POST", () => {
@@ -19,14 +18,13 @@ describe("BHttpEncoder", () => {
       const decodedReq = decoder.decodeRequest(binReq);
 
       // assert
-      assertEquals(decodedReq.method, "POST");
-      assertEquals(
-        decodedReq.headers.get("content-type"),
+      expect(decodedReq.method).toBe("POST");
+      expect(decodedReq.headers.get("content-type")).toBe(
         "application/octet-stream",
       );
-      assertEquals(decodedReq.url, "https://www.example.com/hello.txt");
+      expect(decodedReq.url).toBe("https://www.example.com/hello.txt");
       const body = await decodedReq.arrayBuffer();
-      assertEquals(body.byteLength, 16384);
+      expect(body.byteLength).toBe(16384);
     });
 
     it("should encode a POST request with over 1073741823 byte length content.", async () => {
@@ -42,14 +40,13 @@ describe("BHttpEncoder", () => {
       const decodedReq = decoder.decodeRequest(binReq);
 
       // assert
-      assertEquals(decodedReq.method, "POST");
-      assertEquals(
-        decodedReq.headers.get("content-type"),
+      expect(decodedReq.method).toBe("POST");
+      expect(decodedReq.headers.get("content-type")).toBe(
         "application/octet-stream",
       );
-      assertEquals(decodedReq.url, "https://www.example.com/hello.txt");
+      expect(decodedReq.url).toBe("https://www.example.com/hello.txt");
       const body = await decodedReq.arrayBuffer();
-      assertEquals(body.byteLength, 1073741824);
+      expect(body.byteLength).toBe(1073741824);
     });
   });
 });

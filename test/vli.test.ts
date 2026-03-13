@@ -1,28 +1,27 @@
-import { assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
+import { describe, expect, it } from "vitest";
 
-import { MAX, decodeVli, encodeVli, vliEncodedLength } from "../src/vli.ts";
+import { MAX, decodeVli, encodeVli, vliEncodedLength } from "../src/vli";
 
 describe("VLI", () => {
 	describe("vliEncodedLength", () => {
 		it("returns 1 for values 0-63", () => {
-			assertEquals(vliEncodedLength(0), 1);
-			assertEquals(vliEncodedLength(63), 1);
+			expect(vliEncodedLength(0)).toBe(1);
+			expect(vliEncodedLength(63)).toBe(1);
 		});
 
 		it("returns 2 for values 64-16383", () => {
-			assertEquals(vliEncodedLength(64), 2);
-			assertEquals(vliEncodedLength(16383), 2);
+			expect(vliEncodedLength(64)).toBe(2);
+			expect(vliEncodedLength(16383)).toBe(2);
 		});
 
 		it("returns 4 for values 16384-1073741823", () => {
-			assertEquals(vliEncodedLength(16384), 4);
-			assertEquals(vliEncodedLength(1073741823), 4);
+			expect(vliEncodedLength(16384)).toBe(4);
+			expect(vliEncodedLength(1073741823)).toBe(4);
 		});
 
 		it("returns 8 for values up to MAX", () => {
-			assertEquals(vliEncodedLength(1073741824), 8);
-			assertEquals(vliEncodedLength(MAX), 8);
+			expect(vliEncodedLength(1073741824)).toBe(8);
+			expect(vliEncodedLength(MAX)).toBe(8);
 		});
 	});
 
@@ -43,33 +42,33 @@ describe("VLI", () => {
 			it(`roundtrips ${value}`, () => {
 				const encoded = encodeVli(value);
 				const decoded = decodeVli(encoded, 0);
-				assertEquals(decoded?.value, value);
-				assertEquals(decoded?.bytesRead, encoded.length);
+				expect(decoded?.value).toBe(value);
+				expect(decoded?.bytesRead).toBe(encoded.length);
 			});
 		}
 	});
 
 	describe("decodeVli streaming", () => {
 		it("returns undefined when buffer is empty", () => {
-			assertEquals(decodeVli(new Uint8Array(0), 0), undefined);
+			expect(decodeVli(new Uint8Array(0), 0)).toBeUndefined();
 		});
 
 		it("returns undefined when not enough bytes for 2-byte VLI", () => {
 			const encoded = encodeVli(64); // 2-byte encoding
-			assertEquals(encoded.length, 2);
-			assertEquals(decodeVli(encoded.subarray(0, 1), 0), undefined);
+			expect(encoded.length).toBe(2);
+			expect(decodeVli(encoded.subarray(0, 1), 0)).toBeUndefined();
 		});
 
 		it("returns undefined when not enough bytes for 4-byte VLI", () => {
 			const encoded = encodeVli(16384); // 4-byte encoding
-			assertEquals(encoded.length, 4);
-			assertEquals(decodeVli(encoded.subarray(0, 3), 0), undefined);
+			expect(encoded.length).toBe(4);
+			expect(decodeVli(encoded.subarray(0, 3), 0)).toBeUndefined();
 		});
 
 		it("returns undefined when not enough bytes for 8-byte VLI", () => {
 			const encoded = encodeVli(MAX); // 8-byte encoding
-			assertEquals(encoded.length, 8);
-			assertEquals(decodeVli(encoded.subarray(0, 7), 0), undefined);
+			expect(encoded.length).toBe(8);
+			expect(decodeVli(encoded.subarray(0, 7), 0)).toBeUndefined();
 		});
 
 		it("decodes with offset", () => {
@@ -80,8 +79,8 @@ describe("VLI", () => {
 			buf.set(encoded, padding.length);
 
 			const result = decodeVli(buf, padding.length);
-			assertEquals(result?.value, 42);
-			assertEquals(result?.bytesRead, 1);
+			expect(result?.value).toBe(42);
+			expect(result?.bytesRead).toBe(1);
 		});
 	});
 });

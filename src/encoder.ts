@@ -1,5 +1,5 @@
-import * as consts from "./consts.ts";
-import * as errors from "./errors.ts";
+import * as consts from "./consts";
+import * as errors from "./errors";
 
 class EncoderContext {
   public buf: Uint8Array;

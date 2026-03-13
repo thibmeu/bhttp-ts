@@ -1,5 +1,5 @@
-import * as consts from "./consts.ts";
-import * as errors from "./errors.ts";
+import * as consts from "./consts";
+import * as errors from "./errors";
 
 class InformationalResponse {
   public status: number;
@@ -46,9 +46,11 @@ class RequestDecoderContext extends DecoderContext {
         method: this.method,
       });
     } else {
+      // Create a new Uint8Array copy to ensure we have a clean ArrayBuffer
+      const bodyBuffer = new Uint8Array(this.content).buffer as ArrayBuffer;
       req = new Request(input, {
         method: this.method,
-        body: this.content,
+        body: bodyBuffer,
       });
     }
     this.headers.forEach((value, key) => {
@@ -68,7 +70,9 @@ class ResponseDecoderContext extends DecoderContext {
   }
 
   public createResponse(): Response {
-    return new Response(this.content, {
+    // Create a new Uint8Array copy to ensure we have a clean ArrayBuffer
+    const bodyBuffer = new Uint8Array(this.content).buffer as ArrayBuffer;
+    return new Response(bodyBuffer, {
       status: this.status,
       headers: this.headers,
     });
@@ -364,7 +368,8 @@ export class BHttpDecoder {
 
   private checkPadding(ctx: DecoderContext) {
     while (ctx.p < ctx.buf.byteLength) {
-      if (ctx.buf[ctx.p++] !== 0x00) {
+      const byte = ctx.buf[ctx.p++];
+      if (byte !== 0x00) {
         throw new errors.InvalidMessageError("Invalid padding data.");
       }
     }
@@ -381,39 +386,48 @@ export class BHttpDecoder {
 
   private decodeVli(ctx: DecoderContext): number {
     let res = 0;
+    const firstByte = ctx.buf[ctx.p];
+    if (firstByte === undefined) {
+      throw new errors.InvalidMessageError("Unexpected end of buffer");
+    }
 
-    switch (ctx.buf[ctx.p] & consts.VLI_MASK_VALUE) {
+    switch (firstByte & consts.VLI_MASK_VALUE) {
       case consts.VLI_LEN_1:
-        return ctx.buf[ctx.p++] & consts.VLI_MASK_HEADER;
+        ctx.p++;
+        return firstByte & consts.VLI_MASK_HEADER;
 
       case consts.VLI_LEN_2:
-        res = (ctx.buf[ctx.p++] & consts.VLI_MASK_HEADER) << 8;
-        res += ctx.buf[ctx.p++];
+        res = (firstByte & consts.VLI_MASK_HEADER) << 8;
+        ctx.p++;
+        res += ctx.buf[ctx.p++] ?? 0;
         return res;
 
       case consts.VLI_LEN_4:
-        res = (ctx.buf[ctx.p++] & consts.VLI_MASK_HEADER) << 24;
-        res += ctx.buf[ctx.p++] << 16;
-        res += ctx.buf[ctx.p++] << 8;
-        res += ctx.buf[ctx.p++];
+        res = (firstByte & consts.VLI_MASK_HEADER) << 24;
+        ctx.p++;
+        res += (ctx.buf[ctx.p++] ?? 0) << 16;
+        res += (ctx.buf[ctx.p++] ?? 0) << 8;
+        res += ctx.buf[ctx.p++] ?? 0;
         return res;
 
       default:
         // consts.VLI_LEN_8
         // res = (ctx.buf[ctx.p++] & consts.VLI_MASK_HEADER) << 56;
         res = 0;
-        if (ctx.buf[++ctx.p] > 15) {
+        ctx.p++;
+        const nextByte = ctx.buf[ctx.p];
+        if (nextByte !== undefined && nextByte > 15) {
           throw new errors.NotSupportedError(
             "Over MAX_SAFE_INTEGER-length value is not supported.",
           );
         }
-        res += ctx.buf[ctx.p++] << 48;
-        res += ctx.buf[ctx.p++] << 40;
-        res += ctx.buf[ctx.p++] << 32;
-        res += ctx.buf[ctx.p++] << 24;
-        res += ctx.buf[ctx.p++] << 16;
-        res += ctx.buf[ctx.p++] << 8;
-        res += ctx.buf[ctx.p++];
+        res += (ctx.buf[ctx.p++] ?? 0) << 48;
+        res += (ctx.buf[ctx.p++] ?? 0) << 40;
+        res += (ctx.buf[ctx.p++] ?? 0) << 32;
+        res += (ctx.buf[ctx.p++] ?? 0) << 24;
+        res += (ctx.buf[ctx.p++] ?? 0) << 16;
+        res += (ctx.buf[ctx.p++] ?? 0) << 8;
+        res += ctx.buf[ctx.p++] ?? 0;
         return res;
     }
   }

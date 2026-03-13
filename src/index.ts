@@ -1,12 +1,12 @@
-export { BHttpDecoder } from "./src/decoder.ts";
-export { BHttpEncoder } from "./src/encoder.ts";
-export * from "./src/errors.ts";
+export { BHttpDecoder } from "./decoder";
+export { BHttpEncoder } from "./encoder";
+export * from "./errors";
 
 // Streaming API
 export {
 	BHttpRequestStreamEncoder,
 	BHttpResponseStreamEncoder,
-} from "./src/stream-encoder.ts";
+} from "./stream-encoder";
 export {
 	BHttpStreamDecoder,
 	type BHttpEvent,
@@ -16,7 +16,7 @@ export {
 	type BHttpContentEvent,
 	type BHttpTrailersEvent,
 	type BHttpEndEvent,
-} from "./src/stream-decoder.ts";
+} from "./stream-decoder";
 
 // VLI utilities (for advanced use)
 export {
@@ -24,4 +24,4 @@ export {
 	decodeVli,
 	vliEncodedLength,
 	type VliDecodeResult,
-} from "./src/vli.ts";
+} from "./vli";

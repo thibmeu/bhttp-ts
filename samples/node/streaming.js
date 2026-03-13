@@ -8,7 +8,7 @@ const {
 	BHttpRequestStreamEncoder,
 	BHttpResponseStreamEncoder,
 	BHttpStreamDecoder,
-} = require("bhttp-js");
+} = require("bhttp-ts");
 
 /**
  * Streaming request encoding example

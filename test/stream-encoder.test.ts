@@ -1,8 +1,7 @@
-import { assertEquals, assertThrows } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
+import { describe, expect, it } from "vitest";
 
-import { BHttpDecoder } from "../src/decoder.ts";
-import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "../src/stream-encoder.ts";
+import { BHttpDecoder } from "../src/decoder";
+import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "../src/stream-encoder";
 
 describe("BHttpRequestStreamEncoder", () => {
 	it("encodes empty body request", () => {
@@ -20,9 +19,9 @@ describe("BHttpRequestStreamEncoder", () => {
 		const decoder = new BHttpDecoder();
 		const request = decoder.decodeRequest(full);
 
-		assertEquals(request.method, "GET");
-		assertEquals(new URL(request.url).pathname, "/path");
-		assertEquals(new URL(request.url).hostname, "example.com");
+		expect(request.method).toBe("GET");
+		expect(new URL(request.url).pathname).toBe("/path");
+		expect(new URL(request.url).hostname).toBe("example.com");
 	});
 
 	it("encodes request with body chunks", async () => {
@@ -50,8 +49,8 @@ describe("BHttpRequestStreamEncoder", () => {
 		const decoder = new BHttpDecoder();
 		const request = decoder.decodeRequest(full);
 
-		assertEquals(request.method, "POST");
-		assertEquals(await request.text(), "Hello, World!");
+		expect(request.method).toBe("POST");
+		expect(await request.text()).toBe("Hello, World!");
 	});
 
 	it("encodes request with query parameters", () => {
@@ -74,26 +73,22 @@ describe("BHttpRequestStreamEncoder", () => {
 		const decoder = new BHttpDecoder();
 		const request = decoder.decodeRequest(full);
 
-		assertEquals(new URL(request.url).search, "?q=test&page=1");
+		expect(new URL(request.url).search).toBe("?q=test&page=1");
 	});
 
 	it("throws if preamble encoded twice", () => {
 		const encoder = new BHttpRequestStreamEncoder();
 		encoder.encodePreamble("GET", "https", "example.com", "/", new Headers());
 
-		assertThrows(
-			() => encoder.encodePreamble("GET", "https", "example.com", "/", new Headers()),
-			Error,
-			"Preamble already encoded",
-		);
+		expect(() =>
+			encoder.encodePreamble("GET", "https", "example.com", "/", new Headers()),
+		).toThrow("Preamble already encoded");
 	});
 
 	it("throws if chunk encoded before preamble", () => {
 		const encoder = new BHttpRequestStreamEncoder();
 
-		assertThrows(
-			() => encoder.encodeContentChunk(new Uint8Array([1, 2, 3])),
-			Error,
+		expect(() => encoder.encodeContentChunk(new Uint8Array([1, 2, 3]))).toThrow(
 			"Preamble must be encoded first",
 		);
 	});
@@ -103,9 +98,7 @@ describe("BHttpRequestStreamEncoder", () => {
 		encoder.encodePreamble("GET", "https", "example.com", "/", new Headers());
 		encoder.encodeEnd();
 
-		assertThrows(
-			() => encoder.encodeContentChunk(new Uint8Array([1, 2, 3])),
-			Error,
+		expect(() => encoder.encodeContentChunk(new Uint8Array([1, 2, 3]))).toThrow(
 			"Encoding already ended",
 		);
 	});
@@ -114,9 +107,7 @@ describe("BHttpRequestStreamEncoder", () => {
 		const encoder = new BHttpRequestStreamEncoder();
 		encoder.encodePreamble("GET", "https", "example.com", "/", new Headers());
 
-		assertThrows(
-			() => encoder.encodeContentChunk(new Uint8Array(0)),
-			Error,
+		expect(() => encoder.encodeContentChunk(new Uint8Array(0))).toThrow(
 			"Content chunk cannot be empty",
 		);
 	});
@@ -137,8 +128,8 @@ describe("BHttpResponseStreamEncoder", () => {
 		const decoder = new BHttpDecoder();
 		const response = decoder.decodeResponse(full);
 
-		assertEquals(response.status, 200);
-		assertEquals(response.headers.get("content-type"), "text/plain");
+		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toBe("text/plain");
 	});
 
 	it("encodes response with body chunks", async () => {
@@ -165,8 +156,8 @@ describe("BHttpResponseStreamEncoder", () => {
 		const decoder = new BHttpDecoder();
 		const response = decoder.decodeResponse(full);
 
-		assertEquals(response.status, 200);
-		assertEquals(await response.json(), { message: "ok" });
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ message: "ok" });
 	});
 
 	it("encodes response with trailers", async () => {
@@ -186,8 +177,8 @@ describe("BHttpResponseStreamEncoder", () => {
 		const decoder = new BHttpDecoder();
 		const response = decoder.decodeResponse(full);
 
-		assertEquals(response.status, 200);
-		assertEquals(await response.text(), "body");
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe("body");
 		// Note: trailers are parsed but Response API doesn't expose them easily
 	});
 
@@ -210,15 +201,13 @@ describe("BHttpResponseStreamEncoder", () => {
 		const decoder = new BHttpDecoder();
 		const response = decoder.decodeResponse(full);
 
-		assertEquals(response.status, 200);
+		expect(response.status).toBe(200);
 	});
 
 	it("throws on invalid final status", () => {
 		const encoder = new BHttpResponseStreamEncoder();
 
-		assertThrows(
-			() => encoder.encodePreamble(100, new Headers()),
-			Error,
+		expect(() => encoder.encodePreamble(100, new Headers())).toThrow(
 			"Final status must be 200-599",
 		);
 	});
@@ -226,10 +215,8 @@ describe("BHttpResponseStreamEncoder", () => {
 	it("throws on invalid informational status", () => {
 		const encoder = new BHttpResponseStreamEncoder();
 
-		assertThrows(
-			() => encoder.encodePreamble(200, new Headers(), [{ status: 200, headers: new Headers() }]),
-			Error,
-			"Informational status must be 100-199",
-		);
+		expect(() =>
+			encoder.encodePreamble(200, new Headers(), [{ status: 200, headers: new Headers() }]),
+		).toThrow("Informational status must be 100-199");
 	});
 });

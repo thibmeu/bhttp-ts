@@ -1,4 +1,4 @@
-const { BHttpEncoder, BHttpDecoder } = require("bhttp-js");
+const { BHttpEncoder, BHttpDecoder } = require("bhttp-ts");
 
 async function doBHttp() {
   const req = new Request("https://www.example.com/hello.txt", {

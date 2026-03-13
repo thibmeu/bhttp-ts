@@ -1,15 +1,14 @@
-import { assertEquals, assertThrows } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
+import { describe, expect, it } from "vitest";
 
-import { BHttpEncoder } from "../src/encoder.ts";
+import { BHttpEncoder } from "../src/encoder";
 import {
 	type BHttpContentEvent,
 	type BHttpEvent,
 	type BHttpRequestPreambleEvent,
 	type BHttpResponsePreambleEvent,
 	BHttpStreamDecoder,
-} from "../src/stream-decoder.ts";
-import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "../src/stream-encoder.ts";
+} from "../src/stream-decoder";
+import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "../src/stream-encoder";
 
 describe("BHttpStreamDecoder", () => {
 	describe("indeterminate-length request", () => {
@@ -28,16 +27,16 @@ describe("BHttpStreamDecoder", () => {
 			const events = decoder.push(full);
 			const endEvents = decoder.end();
 
-			assertEquals(events.length, 1);
-			assertEquals(events[0].type, "request-preamble");
+			expect(events.length).toBe(1);
+			expect(events[0]?.type).toBe("request-preamble");
 			const preambleEvent = events[0] as BHttpRequestPreambleEvent;
-			assertEquals(preambleEvent.method, "GET");
-			assertEquals(preambleEvent.scheme, "https");
-			assertEquals(preambleEvent.authority, "example.com");
-			assertEquals(preambleEvent.path, "/path");
+			expect(preambleEvent.method).toBe("GET");
+			expect(preambleEvent.scheme).toBe("https");
+			expect(preambleEvent.authority).toBe("example.com");
+			expect(preambleEvent.path).toBe("/path");
 
-			assertEquals(endEvents.length, 1);
-			assertEquals(endEvents[0].type, "end");
+			expect(endEvents.length).toBe(1);
+			expect(endEvents[0]?.type).toBe("end");
 		});
 
 		it("decodes request with body chunks", () => {
@@ -60,15 +59,15 @@ describe("BHttpStreamDecoder", () => {
 			const events = decoder.push(full);
 			decoder.end();
 
-			assertEquals(events.length, 3);
-			assertEquals(events[0].type, "request-preamble");
-			assertEquals(events[1].type, "content");
-			assertEquals(events[2].type, "content");
+			expect(events.length).toBe(3);
+			expect(events[0]?.type).toBe("request-preamble");
+			expect(events[1]?.type).toBe("content");
+			expect(events[2]?.type).toBe("content");
 
 			const content1 = events[1] as BHttpContentEvent;
 			const content2 = events[2] as BHttpContentEvent;
-			assertEquals(new TextDecoder().decode(content1.data), "Hello");
-			assertEquals(new TextDecoder().decode(content2.data), "World");
+			expect(new TextDecoder().decode(content1.data)).toBe("Hello");
+			expect(new TextDecoder().decode(content2.data)).toBe("World");
 		});
 
 		it("decodes incrementally byte-by-byte", () => {
@@ -93,8 +92,8 @@ describe("BHttpStreamDecoder", () => {
 			allEvents.push(...decoder.end());
 
 			// Should still get same events
-			assertEquals(allEvents.filter((e) => e.type === "request-preamble").length, 1);
-			assertEquals(allEvents.filter((e) => e.type === "end").length, 1);
+			expect(allEvents.filter((e) => e.type === "request-preamble").length).toBe(1);
+			expect(allEvents.filter((e) => e.type === "end").length).toBe(1);
 		});
 	});
 
@@ -114,11 +113,11 @@ describe("BHttpStreamDecoder", () => {
 			const events = decoder.push(full);
 			decoder.end();
 
-			assertEquals(events.length, 1);
-			assertEquals(events[0].type, "response-preamble");
+			expect(events.length).toBe(1);
+			expect(events[0]?.type).toBe("response-preamble");
 			const preambleEvent = events[0] as BHttpResponsePreambleEvent;
-			assertEquals(preambleEvent.status, 200);
-			assertEquals(preambleEvent.headers.get("content-type"), "application/json");
+			expect(preambleEvent.status).toBe(200);
+			expect(preambleEvent.headers.get("content-type")).toBe("application/json");
 		});
 
 		it("decodes response with informational responses", () => {
@@ -145,8 +144,8 @@ describe("BHttpStreamDecoder", () => {
 			const infos = events.filter((e) => e.type === "informational");
 			const preambles = events.filter((e) => e.type === "response-preamble");
 
-			assertEquals(infos.length, 2);
-			assertEquals(preambles.length, 1);
+			expect(infos.length).toBe(2);
+			expect(preambles.length).toBe(1);
 		});
 
 		it("decodes response with body and trailers", () => {
@@ -168,7 +167,7 @@ describe("BHttpStreamDecoder", () => {
 			decoder.end();
 
 			const trailerEvents = events.filter((e) => e.type === "trailers");
-			assertEquals(trailerEvents.length, 1);
+			expect(trailerEvents.length).toBe(1);
 		});
 	});
 
@@ -187,13 +186,13 @@ describe("BHttpStreamDecoder", () => {
 			const events = decoder.push(encoded);
 			decoder.end();
 
-			assertEquals(events.length, 2); // preamble + content
-			assertEquals(events[0].type, "request-preamble");
-			assertEquals(events[1].type, "content");
+			expect(events.length).toBe(2); // preamble + content
+			expect(events[0]?.type).toBe("request-preamble");
+			expect(events[1]?.type).toBe("content");
 
 			const preambleEvent = events[0] as BHttpRequestPreambleEvent;
-			assertEquals(preambleEvent.method, "POST");
-			assertEquals(preambleEvent.path, "/api?q=test");
+			expect(preambleEvent.method).toBe("POST");
+			expect(preambleEvent.path).toBe("/api?q=test");
 		});
 
 		it("decodes known-length response from BHttpEncoder", async () => {
@@ -209,12 +208,12 @@ describe("BHttpStreamDecoder", () => {
 			const events = decoder.push(encoded);
 			decoder.end();
 
-			assertEquals(events.length, 2); // preamble + content
-			assertEquals(events[0].type, "response-preamble");
+			expect(events.length).toBe(2); // preamble + content
+			expect(events[0]?.type).toBe("response-preamble");
 
 			const preambleEvent = events[0] as BHttpResponsePreambleEvent;
-			assertEquals(preambleEvent.status, 201);
-			assertEquals(preambleEvent.headers.get("x-custom"), "value");
+			expect(preambleEvent.status).toBe(201);
+			expect(preambleEvent.headers.get("x-custom")).toBe("value");
 		});
 	});
 
@@ -223,7 +222,7 @@ describe("BHttpStreamDecoder", () => {
 			const decoder = new BHttpStreamDecoder();
 
 			// Framing indicator 4 is invalid
-			assertThrows(() => decoder.push(new Uint8Array([4])), Error, "Invalid framing indicator");
+			expect(() => decoder.push(new Uint8Array([4]))).toThrow("Invalid framing indicator");
 		});
 
 		it("throws on incomplete message at end()", () => {
@@ -234,7 +233,7 @@ describe("BHttpStreamDecoder", () => {
 			const decoder = new BHttpStreamDecoder();
 			decoder.push(preamble);
 
-			assertThrows(() => decoder.end(), Error, "Incomplete message");
+			expect(() => decoder.end()).toThrow("Incomplete message");
 		});
 
 		it("throws if push called after end", () => {
@@ -250,11 +249,7 @@ describe("BHttpStreamDecoder", () => {
 			decoder.push(full);
 			decoder.end();
 
-			assertThrows(
-				() => decoder.push(new Uint8Array([1, 2, 3])),
-				Error,
-				"Decoder already finished",
-			);
+			expect(() => decoder.push(new Uint8Array([1, 2, 3]))).toThrow("Decoder already finished");
 		});
 	});
 
@@ -290,9 +285,9 @@ describe("BHttpStreamDecoder", () => {
 			allEvents.push(...decoder.end());
 
 			// Verify we got all expected events
-			assertEquals(allEvents.filter((e) => e.type === "response-preamble").length, 1);
-			assertEquals(allEvents.filter((e) => e.type === "content").length, 1);
-			assertEquals(allEvents.filter((e) => e.type === "end").length, 1);
+			expect(allEvents.filter((e) => e.type === "response-preamble").length).toBe(1);
+			expect(allEvents.filter((e) => e.type === "content").length).toBe(1);
+			expect(allEvents.filter((e) => e.type === "end").length).toBe(1);
 		});
 	});
 });

@@ -1,8 +1,7 @@
-import { assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
+import { describe, expect, it } from "vitest";
 
-import { BHttpEncoder } from "../src/encoder.ts";
-import { BHttpDecoder } from "../src/decoder.ts";
+import { BHttpEncoder } from "../src/encoder";
+import { BHttpDecoder } from "../src/decoder";
 
 describe("BHttpDecoder/Encoder", () => {
   describe("GET", () => {
@@ -25,11 +24,10 @@ describe("BHttpDecoder/Encoder", () => {
       decodedReq = decoder.decodeRequest(binReq.buffer as ArrayBuffer);
 
       // assert
-      assertEquals(
-        decodedReq.headers.get("user-agent"),
+      expect(decodedReq.headers.get("user-agent")).toBe(
         "curl/7.16.3 libcurl/7.16.3 OpenSSL/0.9.7l zlib/1.2.3",
       );
-      assertEquals(decodedReq.headers.get("accept-language"), "en, mi");
+      expect(decodedReq.headers.get("accept-language")).toBe("en, mi");
     });
 
     it("should encode and decode a GET request with query parameters.", async () => {
@@ -51,12 +49,11 @@ describe("BHttpDecoder/Encoder", () => {
       decodedReq = decoder.decodeRequest(binReq.buffer as ArrayBuffer);
 
       // assert
-      assertEquals(
-        decodedReq.headers.get("user-agent"),
+      expect(decodedReq.headers.get("user-agent")).toBe(
         "curl/7.16.3 libcurl/7.16.3 OpenSSL/0.9.7l zlib/1.2.3",
       );
-      assertEquals(decodedReq.headers.get("accept-language"), "en, mi");
-      assertEquals(decodedReq.url, "https://www.example.com/query?foo=bar");
+      expect(decodedReq.headers.get("accept-language")).toBe("en, mi");
+      expect(decodedReq.url).toBe("https://www.example.com/query?foo=bar");
     });
   });
 
@@ -74,11 +71,11 @@ describe("BHttpDecoder/Encoder", () => {
       const decodedReq = decoder.decodeRequest(binReq);
 
       // assert
-      assertEquals(decodedReq.method, "POST");
-      assertEquals(decodedReq.headers.get("content-type"), "text/plain");
-      assertEquals(decodedReq.url, "https://www.example.com/hello.txt");
+      expect(decodedReq.method).toBe("POST");
+      expect(decodedReq.headers.get("content-type")).toBe("text/plain");
+      expect(decodedReq.url).toBe("https://www.example.com/hello.txt");
       const body = await decodedReq.text();
-      assertEquals(body, "Hello world!");
+      expect(body).toBe("Hello world!");
     });
 
     it("should encode and decode a POST request with string[][] headers.", async () => {
@@ -94,11 +91,11 @@ describe("BHttpDecoder/Encoder", () => {
       const decodedReq = decoder.decodeRequest(binReq);
 
       // assert
-      assertEquals(decodedReq.method, "POST");
-      assertEquals(decodedReq.headers.get("content-type"), "text/plain");
-      assertEquals(decodedReq.url, "https://www.example.com/hello.txt");
+      expect(decodedReq.method).toBe("POST");
+      expect(decodedReq.headers.get("content-type")).toBe("text/plain");
+      expect(decodedReq.url).toBe("https://www.example.com/hello.txt");
       const body = await decodedReq.text();
-      assertEquals(body, "Hello world!");
+      expect(body).toBe("Hello world!");
     });
 
     it("should encode and decode a POST request with HeadersInit headers.", async () => {
@@ -116,17 +113,13 @@ describe("BHttpDecoder/Encoder", () => {
       const decodedReq = decoder.decodeRequest(binReq);
 
       // assert
-      assertEquals(decodedReq.method, "POST");
-      assertEquals(
-        (decodedReq.headers.get("content-type") as string).slice(
-          0,
-          "text/plain".length,
-        ),
-        "text/plain",
-      );
-      assertEquals(decodedReq.url, "https://www.example.com/hello.txt");
+      expect(decodedReq.method).toBe("POST");
+      expect(
+        decodedReq.headers.get("content-type")?.slice(0, "text/plain".length),
+      ).toBe("text/plain");
+      expect(decodedReq.url).toBe("https://www.example.com/hello.txt");
       const body = await decodedReq.text();
-      assertEquals(body, "Hello world!");
+      expect(body).toBe("Hello world!");
     });
   });
 });

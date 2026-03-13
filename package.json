@@ -1,0 +1,63 @@
+{
+	"name": "bhttp-ts",
+	"version": "0.4.0",
+	"description": "BHTTP (RFC 9292) encoder and decoder for the Fetch API Request/Response interface",
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			},
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			}
+		}
+	},
+	"files": ["dist"],
+	"scripts": {
+		"build": "tsup",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"lint": "biome check src test",
+		"format": "biome format --write src test",
+		"typecheck": "tsc --noEmit"
+	},
+	"keywords": [
+		"bhttp",
+		"binary-http",
+		"rfc9292",
+		"fetch-api",
+		"request",
+		"response",
+		"encoder",
+		"decoder",
+		"cloudflare-workers"
+	],
+	"author": "Ajitomi Daisuke",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/thibmeu/bhttp-ts.git"
+	},
+	"bugs": {
+		"url": "https://github.com/thibmeu/bhttp-ts/issues"
+	},
+	"homepage": "https://github.com/thibmeu/bhttp-ts#readme",
+	"dependencies": {
+		"quicvarint": "^0.1.6"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.0",
+		"tsup": "^8.3.0",
+		"typescript": "^5.7.0",
+		"vitest": "^2.1.0"
+	},
+	"engines": {
+		"node": ">=22"
+	}
+}

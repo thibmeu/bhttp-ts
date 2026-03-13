@@ -11,7 +11,7 @@
  * Learn more at https://developers.cloudflare.com/workers/
  */
 
-import { BHttpDecoder, BHttpEncoder } from "@dajiaji/bhttp";
+import { BHttpDecoder, BHttpEncoder } from "bhttp-ts";
 
 export default {
   async fetch(request: Request): Promise<Response> {

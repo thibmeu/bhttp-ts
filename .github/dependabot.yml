@@ -1,18 +1,6 @@
 version: 2
 updates:
   - package-ecosystem: "npm"
-    directory: "/samples/node/"
+    directory: "/"
     schedule:
-      interval: "daily"
-  - package-ecosystem: "npm"
-    directory: "/test/runtimes/browsers/"
-    schedule:
-      interval: "daily"
-  - package-ecosystem: "npm"
-    directory: "/test/runtimes/cloudflare/"
-    schedule:
-      interval: "daily"
-  - package-ecosystem: "npm"
-    directory: "/test/runtimes/fastly/"
-    schedule:
-      interval: "daily"
+      interval: "weekly"

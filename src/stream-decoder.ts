@@ -5,8 +5,8 @@
  * Supports both known-length (0/1) and indeterminate-length (2/3) messages.
  */
 
-import { InvalidMessageError } from "./errors.ts";
-import { decodeVli } from "./vli.ts";
+import { InvalidMessageError } from "./errors";
+import { decodeVli } from "./vli";
 
 // Framing indicators
 const FRAMING_REQUEST_KNOWN = 0;

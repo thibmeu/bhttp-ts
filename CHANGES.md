@@ -1,6 +1,17 @@
 # Changes
 
-## Unreleased
+## Version 0.4.0
+
+Released 2026-03-13
+
+- Fork from dajiaji/bhttp-js
+- Convert from Deno to npm package
+- Add streaming encoder/decoder API
+- Add VLI utilities export
+- Require Node.js >= 22
+- Use vitest for testing
+- Use tsup for bundling
+- Use biome for linting/formatting
 
 ## Version 0.3.6
 

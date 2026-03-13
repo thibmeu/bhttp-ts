@@ -1,11 +1,10 @@
 {
 	"name": "node-bhttp-sample",
 	"version": "1.0.0",
-	"description": "A sample code of bhttp-js.",
+	"description": "A sample code of bhttp-ts.",
 	"main": "app.js",
-	"author": "Ajitomi Daisuke <ajitomi@gmail.com> (https://github.com/dajiaji)",
 	"license": "MIT",
 	"dependencies": {
-		"bhttp-js": "file:../../npm"
+		"bhttp-ts": "file:../.."
 	}
 }

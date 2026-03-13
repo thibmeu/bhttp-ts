@@ -1,10 +1,9 @@
-import { assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
+import { describe, expect, it } from "vitest";
 
-import { BHttpEncoder } from "../src/encoder.ts";
-import { BHttpDecoder } from "../src/decoder.ts";
+import { BHttpEncoder } from "../src/encoder";
+import { BHttpDecoder } from "../src/decoder";
 
-import { hexStringToBytes } from "./utils.ts";
+import { hexStringToBytes } from "./utils";
 
 describe("BHttpDecoder/Encoder", () => {
   describe("Decode known-length request and encode it to BHTTP again", () => {
@@ -24,31 +23,29 @@ describe("BHttpDecoder/Encoder", () => {
       let req = decoder.decodeRequest(exampleData);
 
       // assert
-      assertEquals(req.method, "GET");
-      assertEquals(req.url, "https://www.example.com/hello.txt");
-      assertEquals(
-        req.headers.get("user-agent"),
+      expect(req.method).toBe("GET");
+      expect(req.url).toBe("https://www.example.com/hello.txt");
+      expect(req.headers.get("user-agent")).toBe(
         "curl/7.16.3 libcurl/7.16.3 OpenSSL/0.9.7l zlib/1.2.3",
       );
-      // assertEquals(req.headers.get("host"), "www.example.com");
-      assertEquals(req.headers.get("accept-language"), "en, mi");
+      // expect(req.headers.get("host")).toBe("www.example.com");
+      expect(req.headers.get("accept-language")).toBe("en, mi");
 
       const encoder = new BHttpEncoder();
       const encodedReq = await encoder.encodeRequest(req);
 
-      // assertEquals(exampleData, encodedReq);
+      // expect(exampleData).toEqual(encodedReq);
 
       req = decoder.decodeRequest(encodedReq);
 
       // assert
-      assertEquals(req.method, "GET");
-      assertEquals(req.url, "https://www.example.com/hello.txt");
-      assertEquals(
-        req.headers.get("user-agent"),
+      expect(req.method).toBe("GET");
+      expect(req.url).toBe("https://www.example.com/hello.txt");
+      expect(req.headers.get("user-agent")).toBe(
         "curl/7.16.3 libcurl/7.16.3 OpenSSL/0.9.7l zlib/1.2.3",
       );
-      // assertEquals(req.headers.get("host"), "www.example.com");
-      assertEquals(req.headers.get("accept-language"), "en, mi");
+      // expect(req.headers.get("host")).toBe("www.example.com");
+      expect(req.headers.get("accept-language")).toBe("en, mi");
     });
   });
 
@@ -69,31 +66,29 @@ describe("BHttpDecoder/Encoder", () => {
       let req = decoder.decodeRequest(exampleData);
 
       // assert
-      assertEquals(req.method, "GET");
-      assertEquals(req.url, "https://www.example.com/hello.txt");
-      assertEquals(
-        req.headers.get("User-Agent"),
+      expect(req.method).toBe("GET");
+      expect(req.url).toBe("https://www.example.com/hello.txt");
+      expect(req.headers.get("User-Agent")).toBe(
         "curl/7.16.3 libcurl/7.16.3 OpenSSL/0.9.7l zlib/1.2.3",
       );
-      // assertEquals(req.headers.get("host"), "www.example.com");
-      assertEquals(req.headers.get("accept-language"), "en, mi");
+      // expect(req.headers.get("host")).toBe("www.example.com");
+      expect(req.headers.get("accept-language")).toBe("en, mi");
 
       const encoder = new BHttpEncoder();
       const encodedReq = await encoder.encodeRequest(req);
 
-      // assertEquals(exampleData, encodedReq);
+      // expect(exampleData).toEqual(encodedReq);
 
       req = decoder.decodeRequest(encodedReq);
 
       // assert
-      assertEquals(req.method, "GET");
-      assertEquals(req.url, "https://www.example.com/hello.txt");
-      assertEquals(
-        req.headers.get("User-Agent"),
+      expect(req.method).toBe("GET");
+      expect(req.url).toBe("https://www.example.com/hello.txt");
+      expect(req.headers.get("User-Agent")).toBe(
         "curl/7.16.3 libcurl/7.16.3 OpenSSL/0.9.7l zlib/1.2.3",
       );
-      // assertEquals(req.headers.get("host"), "www.example.com");
-      assertEquals(req.headers.get("accept-language"), "en, mi");
+      // expect(req.headers.get("host")).toBe("www.example.com");
+      expect(req.headers.get("accept-language")).toBe("en, mi");
     });
   });
 
@@ -130,48 +125,44 @@ describe("BHttpDecoder/Encoder", () => {
       res = decoder.decodeResponse(exampleData.buffer as ArrayBuffer);
 
       // assert
-      assertEquals(res.status, 200);
-      assertEquals(res.headers.get("date"), "Mon, 27 Jul 2009 12:28:53 GMT");
-      assertEquals(res.headers.get("server"), "Apache");
-      assertEquals(
-        res.headers.get("Last-Modified"),
+      expect(res.status).toBe(200);
+      expect(res.headers.get("date")).toBe("Mon, 27 Jul 2009 12:28:53 GMT");
+      expect(res.headers.get("server")).toBe("Apache");
+      expect(res.headers.get("Last-Modified")).toBe(
         "Wed, 22 Jul 2009 19:15:56 GMT",
       );
-      assertEquals(res.headers.get("etag"), '"34aa387-d-1568eb00"');
-      assertEquals(res.headers.get("accept-ranges"), "bytes");
-      assertEquals(res.headers.get("content-length"), "51");
-      assertEquals(res.headers.get("vary"), "Accept-Encoding");
-      assertEquals(res.headers.get("content-type"), "text/plain");
+      expect(res.headers.get("etag")).toBe('"34aa387-d-1568eb00"');
+      expect(res.headers.get("accept-ranges")).toBe("bytes");
+      expect(res.headers.get("content-length")).toBe("51");
+      expect(res.headers.get("vary")).toBe("Accept-Encoding");
+      expect(res.headers.get("content-type")).toBe("text/plain");
       // const td = new TextDecoder();
       // const body = await res.arrayBuffer();
-      // assertEquals(
+      // expect(
       //   td.decode(new Uint8Array(body)),
-      //   "Hello World! My content includes a trailing CRLF.\r\n",
-      // );
+      // ).toBe("Hello World! My content includes a trailing CRLF.\r\n");
 
       const encoder = new BHttpEncoder();
       const encodedRes = await encoder.encodeResponse(res);
 
-      // assertEquals(exampleData, encodedReq);
+      // expect(exampleData).toEqual(encodedReq);
       res = decoder.decodeResponse(encodedRes);
 
       // assert
-      assertEquals(res.status, 200);
-      assertEquals(res.headers.get("date"), "Mon, 27 Jul 2009 12:28:53 GMT");
-      assertEquals(res.headers.get("server"), "Apache");
-      assertEquals(
-        res.headers.get("Last-Modified"),
+      expect(res.status).toBe(200);
+      expect(res.headers.get("date")).toBe("Mon, 27 Jul 2009 12:28:53 GMT");
+      expect(res.headers.get("server")).toBe("Apache");
+      expect(res.headers.get("Last-Modified")).toBe(
         "Wed, 22 Jul 2009 19:15:56 GMT",
       );
-      assertEquals(res.headers.get("etag"), '"34aa387-d-1568eb00"');
-      assertEquals(res.headers.get("accept-ranges"), "bytes");
-      assertEquals(res.headers.get("content-length"), "51");
-      assertEquals(res.headers.get("vary"), "Accept-Encoding");
-      assertEquals(res.headers.get("content-type"), "text/plain");
+      expect(res.headers.get("etag")).toBe('"34aa387-d-1568eb00"');
+      expect(res.headers.get("accept-ranges")).toBe("bytes");
+      expect(res.headers.get("content-length")).toBe("51");
+      expect(res.headers.get("vary")).toBe("Accept-Encoding");
+      expect(res.headers.get("content-type")).toBe("text/plain");
       const td = new TextDecoder();
       const body = await res.arrayBuffer();
-      assertEquals(
-        td.decode(new Uint8Array(body)),
+      expect(td.decode(new Uint8Array(body))).toBe(
         "Hello World! My content includes a trailing CRLF.\r\n",
       );
     });
@@ -188,24 +179,24 @@ describe("BHttpDecoder/Encoder", () => {
       let res = decoder.decodeResponse(exampleData);
 
       // assert
-      assertEquals(res.status, 200);
+      expect(res.status).toBe(200);
       // let trailers = await res.trailer;
-      // assertEquals(trailers, undefined);
+      // expect(trailers).toBeUndefined();
       // const body = await res.text();
-      // assertEquals(body, "This content contains CRLF.\r\n");
+      // expect(body).toBe("This content contains CRLF.\r\n");
 
       const encoder = new BHttpEncoder();
       const encodedRes = await encoder.encodeResponse(res);
 
-      // assertEquals(exampleData, encodedRes);
+      // expect(exampleData).toEqual(encodedRes);
       res = decoder.decodeResponse(encodedRes);
 
       // assert
-      assertEquals(res.status, 200);
+      expect(res.status).toBe(200);
       // trailers = await res.trailer;
-      // assertEquals(trailers, undefined);
+      // expect(trailers).toBeUndefined();
       const body = await res.text();
-      assertEquals(body, "This content contains CRLF.\r\n");
+      expect(body).toBe("This content contains CRLF.\r\n");
     });
   });
 });
