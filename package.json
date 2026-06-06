@@ -1,6 +1,6 @@
 {
 	"name": "bhttp-ts",
-	"version": "0.4.0",
+	"version": "0.4.1",
 	"description": "BHTTP (RFC 9292) encoder and decoder for the Fetch API Request/Response interface",
 	"type": "module",
 	"main": "./dist/index.cjs",
