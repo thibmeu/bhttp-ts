@@ -140,12 +140,22 @@ export class BHttpStreamDecoder {
 			throw new Error("Decoder already finished");
 		}
 
-		// Append to buffer
+		// Append to buffer, dropping the already-consumed prefix first. Without
+		// this, every push copies the entire accumulated history (consumed bytes
+		// included), making chunked decode O(n^2) in the number of pushes.
+		// Compacting keeps each copy proportional to the unconsumed remainder.
 		if (data.length > 0) {
-			const newBuf = new Uint8Array(this._buffer.length + data.length);
-			newBuf.set(this._buffer);
-			newBuf.set(data, this._buffer.length);
+			const remaining = this._buffer.length - this._offset;
+			const newBuf = new Uint8Array(remaining + data.length);
+			newBuf.set(this._buffer.subarray(this._offset), 0);
+			newBuf.set(data, remaining);
 			this._buffer = newBuf;
+			// Rebase persisted absolute offsets by the dropped prefix. _offset and
+			// _knownSectionEnd are the only positions that survive across pushes;
+			// _knownSectionEnd is stale (and recomputed) while _knownSectionLenRead
+			// is false, so rebasing it unconditionally is safe.
+			this._knownSectionEnd -= this._offset;
+			this._offset = 0;
 		}
 
 		const events: BHttpEvent[] = [];
