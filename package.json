@@ -41,7 +41,10 @@
 		"decoder",
 		"cloudflare-workers"
 	],
-	"author": "Ajitomi Daisuke",
+	"contributors": [
+		"Ajitomi Daisuke",
+		"Thibault Meunier"
+	],
 	"license": "MIT",
 	"repository": {
 		"type": "git",
