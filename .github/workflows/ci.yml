@@ -10,7 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  # Core checks across the supported Node.js versions.
+  node:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -28,3 +29,73 @@ jobs:
       - run: npm test
       - name: Check package contents
         run: npm pack --dry-run
+
+  # Run the library on the Bun runtime via the Node sample.
+  bun:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+      - run: npm run build
+      - name: Run samples on Bun
+        working-directory: samples/node
+        run: |
+          bun install
+          bun app.js
+          bun streaming.js
+
+  # Run the sample's tests on the Cloudflare Workers runtime.
+  cloudflare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Run tests on Workers runtime
+        working-directory: samples/cloudflare
+        run: |
+          npm install
+          npx vitest run
+
+  # Run the suite in a real Chromium via Vitest browser mode.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install chromium --with-deps
+      - run: npm run test:browser
+
+  # Run the sample on the Fastly Compute runtime (local Viceroy, no API token).
+  fastly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: fastly/compute-actions/setup@v6
+      - name: Run sample on Fastly Compute (Viceroy)
+        working-directory: samples/fastly
+        run: |
+          npm install
+          fastly compute build
+          nohup fastly compute serve --addr 127.0.0.1:7676 &
+          sleep 15
+          node test.mjs

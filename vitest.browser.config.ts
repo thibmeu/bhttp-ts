@@ -6,6 +6,12 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	test: {
 		include: ["test/**/*.test.ts"],
+		// Browsers forbid setting `User-Agent` (and other forbidden header
+		// names) on a Request, so decodeRequest() cannot round-trip those
+		// headers in-browser. These two suites assert the RFC 9292 curl
+		// example vectors (which include User-Agent), so they only run
+		// outside the browser.
+		exclude: ["test/bhttp.test.ts", "test/example.test.ts"],
 		browser: {
 			enabled: true,
 			provider: "playwright",

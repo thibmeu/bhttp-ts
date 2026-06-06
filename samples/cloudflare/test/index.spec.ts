@@ -2,7 +2,7 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import { BHttpDecoder, BHttpEncoder } from "@dajiaji/bhttp";
+import { BHttpDecoder, BHttpEncoder } from "bhttp-ts";
 
 describe("BHTTP hello world server", () => {
   it("200 OK", async () => {
