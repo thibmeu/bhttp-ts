@@ -1,6 +1,8 @@
 # Changes
 
-## Unreleased
+## Version 0.4.3
+
+Released 2026-06-06
 
 - Fix the encoder to compute VLI length prefixes, buffer sizes, and offsets
   from UTF-8 byte lengths instead of `String.length`. Header values containing
