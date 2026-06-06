@@ -1,7 +1,10 @@
 # Changes
 
-## Unreleased
+## Version 0.4.2
 
+Released 2026-06-06
+
+- sideEffects: false
 - Update dependencies: quicvarint 0.1.7, and dev tooling to Biome 2,
   TypeScript 6, Vitest 4 (with the `@vitest/browser-playwright` provider)
 - Update sample dependencies: Cloudflare Workers sample to
