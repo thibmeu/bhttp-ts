@@ -24,6 +24,7 @@
 	],
 	"scripts": {
 		"build": "tsdown --format esm,cjs --sourcemap --target es2022",
+		"bench": "vitest bench",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:browser": "vitest run --config vitest.browser.config.ts",
