@@ -52,7 +52,7 @@
 		"quicvarint": "^0.1.6"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^1.9.0",
+		"@biomejs/biome": "^2.4.16",
 		"tsdown": "^0.22.1",
 		"typescript": "^5.7.0",
 		"vitest": "^2.1.0"
