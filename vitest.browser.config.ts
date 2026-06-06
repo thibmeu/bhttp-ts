@@ -1,3 +1,4 @@
+import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 
 // Runs the same test suite as vitest.config.ts, but inside a real browser
@@ -14,9 +15,9 @@ export default defineConfig({
 		exclude: ["test/bhttp.test.ts", "test/example.test.ts"],
 		browser: {
 			enabled: true,
-			provider: "playwright",
+			provider: playwright(),
 			headless: true,
-			name: "chromium",
+			instances: [{ browser: "chromium" }],
 		},
 	},
 });

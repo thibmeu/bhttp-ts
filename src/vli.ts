@@ -5,9 +5,9 @@
  * decodeVli() which returns undefined instead (streaming-friendly).
  */
 
-import { MAX, MIN, encode, length, decode as quicDecode } from "quicvarint";
+import { encode, length, MAX, MIN, decode as quicDecode } from "quicvarint";
 
-export { MAX, MIN, encode as encodeVli, length as vliEncodedLength };
+export { encode as encodeVli, length as vliEncodedLength, MAX, MIN };
 
 /**
  * Result of decoding a VLI.

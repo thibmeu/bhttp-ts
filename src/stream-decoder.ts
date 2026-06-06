@@ -344,7 +344,9 @@ export class BHttpStreamDecoder {
 		| undefined {
 		const saveOffset = this._offset;
 		const saveHeaders = new Headers();
-		this._headers.forEach((v, k) => saveHeaders.set(k, v));
+		this._headers.forEach((v, k) => {
+			saveHeaders.set(k, v);
+		});
 
 		const complete = this._tryParseKnownLengthHeaders();
 		if (!complete) {
@@ -366,7 +368,9 @@ export class BHttpStreamDecoder {
 		| undefined {
 		const saveOffset = this._offset;
 		const saveHeaders = new Headers();
-		this._headers.forEach((v, k) => saveHeaders.set(k, v));
+		this._headers.forEach((v, k) => {
+			saveHeaders.set(k, v);
+		});
 		const savePendingName = this._pendingHeaderName;
 
 		const complete = this._tryParseIndeterminateLengthHeaders();

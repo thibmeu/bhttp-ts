@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Update dependencies: quicvarint 0.1.7, and dev tooling to Biome 2,
+  TypeScript 6, Vitest 4 (with the `@vitest/browser-playwright` provider)
+- Update sample dependencies: Cloudflare Workers sample to
+  `@cloudflare/vitest-pool-workers` 0.16 + Vitest 4 (new `cloudflareTest`
+  plugin config), Fastly sample to `@fastly/js-compute` 3.42
 - Test CI against a Node.js 24 + 26 matrix
 - Add multi-runtime CI (Bun, Cloudflare Workers, Fastly Compute, browser via Vitest)
 - Add a Fastly Compute sample under `samples/fastly`

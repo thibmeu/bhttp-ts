@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX, decodeVli, encodeVli, vliEncodedLength } from "../src/vli";
+import { decodeVli, encodeVli, MAX, vliEncodedLength } from "../src/vli";
 
 describe("VLI", () => {
 	describe("vliEncodedLength", () => {
