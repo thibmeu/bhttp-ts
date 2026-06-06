@@ -1,5 +1,11 @@
 # Changes
 
+## Version 0.4.1
+
+Released 2026-06-06
+
+- Migrate bundler from tsup to tsdown
+
 ## Version 0.4.0
 
 Released 2026-03-13
@@ -10,7 +16,7 @@ Released 2026-03-13
 - Add VLI utilities export
 - Require Node.js >= 22
 - Use vitest for testing
-- Use tsdown for bundling
+- Use tsup for bundling
 - Use biome for linting/formatting
 
 ## Version 0.3.6
