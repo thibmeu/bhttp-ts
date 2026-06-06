@@ -24,7 +24,8 @@ export default {
       }
       const reqBody = await request.arrayBuffer();
       const decodedReq = decoder.decodeRequest(reqBody);
-      if (decodedReq.url !== "https://target.example/query") {
+      const url = new URL(decodedReq.url);
+      if (`${url.origin}${url.pathname}` !== "https://target.example/query") {
         throw new Error("Invalid destination.");
       }
       const res = new Response("Hello World!", {
