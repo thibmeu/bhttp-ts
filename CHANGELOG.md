@@ -1,5 +1,19 @@
 # Changes
 
+## Unreleased
+
+- Fix the encoder to compute VLI length prefixes, buffer sizes, and offsets
+  from UTF-8 byte lengths instead of `String.length`. Header values containing
+  Latin-1 characters (U+0080–U+00FF) previously produced an undersized buffer
+  and a corrupt encoding.
+- Improve streaming decoder performance: `push()` now drops already-consumed
+  bytes before appending, avoiding O(n²) re-buffering when a message is fed in
+  many small chunks.
+- Improve decoder performance: read content and field values as `subarray`
+  views instead of copying with `slice`.
+- Add a `npm run bench` benchmark suite (Vitest) and a CI job that compares
+  benchmarks against `main`.
+
 ## Version 0.4.2
 
 Released 2026-06-06
