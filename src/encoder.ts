@@ -1,12 +1,19 @@
 import * as consts from "./consts";
 import * as errors from "./errors";
 
+// Shared UTF-8 encoder. Strings are encoded to bytes once during setup() so
+// that lengths and offsets are computed in UTF-8 bytes (not UTF-16 code units),
+// which is what RFC 9292 requires for the VLI length prefixes.
+const te = new TextEncoder();
+
 class EncoderContext {
 	public buf: Uint8Array;
 	public p = 0;
 	public framingIndicator = 0;
 	public headerSize: number;
 	public body: Uint8Array;
+	// Header name/value pairs, pre-encoded to UTF-8 bytes.
+	public headerPairs: Array<[Uint8Array, Uint8Array]> = [];
 
 	constructor() {
 		this.buf = new Uint8Array(0);
@@ -29,11 +36,32 @@ class EncoderContext {
 		}
 		throw new errors.NotSupportedError("Over MAX_SAFE_INTEGER length value is not supported.");
 	}
+
+	// Bytes needed to encode a VLI-prefixed byte string.
+	protected fieldSize(bytes: Uint8Array): number {
+		return this.calculateVliSize(bytes.length) + bytes.length;
+	}
+
+	// Encode the header pairs to UTF-8 and record headerSize (in bytes).
+	protected encodeHeaders(headers: Headers) {
+		this.headerPairs = [];
+		this.headerSize = 0;
+		headers.forEach((value, key) => {
+			const k = te.encode(key);
+			const v = te.encode(value);
+			this.headerPairs.push([k, v]);
+			this.headerSize += this.fieldSize(k) + this.fieldSize(v);
+		});
+	}
 }
 
 class RequestEncoderContext extends EncoderContext {
 	public request: Request;
 	public url: URL;
+	public method: Uint8Array = new Uint8Array(0);
+	public scheme: Uint8Array = new Uint8Array(0);
+	public authority: Uint8Array = new Uint8Array(0);
+	public path: Uint8Array = new Uint8Array(0);
 
 	constructor(request: Request) {
 		super();
@@ -44,6 +72,12 @@ class RequestEncoderContext extends EncoderContext {
 	public async setup() {
 		// Load requestBody.
 		this.body = new Uint8Array(await this.request.arrayBuffer());
+		// Pre-encode control data and headers to UTF-8.
+		this.method = te.encode(this.request.method);
+		this.scheme = te.encode(this.url.protocol.slice(0, this.url.protocol.length - 1));
+		this.authority = te.encode(this.url.host);
+		this.path = te.encode(this.url.pathname + this.url.search);
+		this.encodeHeaders(this.request.headers);
 		// Setup the output buffer.
 		this.buf = new Uint8Array(this.calculateEncodedRequestSize());
 	}
@@ -52,24 +86,12 @@ class RequestEncoderContext extends EncoderContext {
 		let len = 1; // framing indicator
 
 		// Request Control Data
-		len += 1; // this.calculateVliSize(src.method.length);
-		len += this.request.method.length;
-		len += this.calculateVliSize(this.url.protocol.length - 1);
-		len += this.url.protocol.length - 1;
-		len += this.calculateVliSize(this.url.host.length);
-		len += this.url.host.length;
-		len += this.calculateVliSize(this.url.pathname.length + this.url.search.length);
-		len += this.url.pathname.length;
-		len += this.url.search.length;
+		len += this.fieldSize(this.method);
+		len += this.fieldSize(this.scheme);
+		len += this.fieldSize(this.authority);
+		len += this.fieldSize(this.path);
 
 		// Known Length Headers
-		this.headerSize = 0;
-		this.request.headers.forEach((value, key) => {
-			this.headerSize += this.calculateVliSize(key.length);
-			this.headerSize += key.length;
-			this.headerSize += this.calculateVliSize(value.length);
-			this.headerSize += value.length;
-		});
 		len += this.calculateVliSize(this.headerSize);
 		len += this.headerSize;
 
@@ -96,6 +118,8 @@ class ResponseEncoderContext extends EncoderContext {
 	public async setup() {
 		// Load responseBody.
 		this.body = new Uint8Array(await this.response.arrayBuffer());
+		// Pre-encode headers to UTF-8.
+		this.encodeHeaders(this.response.headers);
 		// Setup the output buffer.
 		this.buf = new Uint8Array(this.calculateEncodedResponseSize());
 	}
@@ -107,13 +131,6 @@ class ResponseEncoderContext extends EncoderContext {
 		len += 2;
 
 		// Known Length Headers
-		this.headerSize = 0;
-		this.response.headers.forEach((value, key) => {
-			this.headerSize += this.calculateVliSize(key.length);
-			this.headerSize += key.length;
-			this.headerSize += this.calculateVliSize(value.length);
-			this.headerSize += value.length;
-		});
 		len += this.calculateVliSize(this.headerSize);
 		len += this.headerSize;
 
@@ -130,12 +147,6 @@ class ResponseEncoderContext extends EncoderContext {
 }
 
 export class BHttpEncoder {
-	private _te: TextEncoder;
-
-	constructor() {
-		this._te = new TextEncoder();
-	}
-
 	public async encodeRequest(src: Request): Promise<Uint8Array> {
 		// Setup RequestEncoderContext.
 		const ctx = new RequestEncoderContext(src);
@@ -146,7 +157,7 @@ export class BHttpEncoder {
 	}
 
 	public async encodeResponse(src: Response): Promise<Uint8Array> {
-		// Setup RequestEncoderContext.
+		// Setup ResponseEncoderContext.
 		const ctx = new ResponseEncoderContext(src);
 		await ctx.setup();
 
@@ -158,17 +169,17 @@ export class BHttpEncoder {
 		this.encodeVli(ctx, 0);
 
 		// Request Control Data
-		this.encodeVliAndValue(ctx, ctx.request.method);
-		this.encodeVliAndValue(ctx, ctx.url.protocol.slice(0, ctx.url.protocol.length - 1));
-		this.encodeVliAndValue(ctx, ctx.url.host);
-		this.encodeVliAndValue(ctx, ctx.url.pathname + ctx.url.search);
+		this.encodeVliAndValue(ctx, ctx.method);
+		this.encodeVliAndValue(ctx, ctx.scheme);
+		this.encodeVliAndValue(ctx, ctx.authority);
+		this.encodeVliAndValue(ctx, ctx.path);
 
 		// Known Length Headers
 		this.encodeVli(ctx, ctx.headerSize);
-		ctx.request.headers.forEach((value, key) => {
+		for (const [key, value] of ctx.headerPairs) {
 			this.encodeVliAndValue(ctx, key);
 			this.encodeVliAndValue(ctx, value);
-		});
+		}
 
 		// Known Length Content
 		this.encodeVli(ctx, ctx.body.byteLength);
@@ -190,10 +201,10 @@ export class BHttpEncoder {
 
 		// Known Length Headers
 		this.encodeVli(ctx, ctx.headerSize);
-		ctx.response.headers.forEach((value, key) => {
+		for (const [key, value] of ctx.headerPairs) {
 			this.encodeVliAndValue(ctx, key);
 			this.encodeVliAndValue(ctx, value);
-		});
+		}
 
 		// Known Length Content
 		this.encodeVli(ctx, ctx.body.byteLength);
@@ -207,10 +218,10 @@ export class BHttpEncoder {
 		return ctx.buf;
 	}
 
-	private encodeVliAndValue(ctx: EncoderContext, v: string) {
-		this.encodeVli(ctx, v.length);
-		ctx.buf.set(this._te.encode(v), ctx.p);
-		ctx.p += v.length;
+	private encodeVliAndValue(ctx: EncoderContext, bytes: Uint8Array) {
+		this.encodeVli(ctx, bytes.length);
+		ctx.buf.set(bytes, ctx.p);
+		ctx.p += bytes.length;
 		return;
 	}
 
