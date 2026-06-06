@@ -286,8 +286,9 @@ export class BHttpDecoder {
 
 	private decodeKnownLengthContent(ctx: DecoderContext) {
 		const len = this.decodeVli(ctx);
-		// ctx.content = new Uint8Array(ctx.buf, ctx.p, len);
-		ctx.content = ctx.buf.slice(ctx.p, ctx.p + len);
+		// View into the input buffer; createRequest/createResponse copies it once
+		// into an owned buffer, so an extra copy here would be redundant.
+		ctx.content = ctx.buf.subarray(ctx.p, ctx.p + len);
 		ctx.p += len;
 		return;
 	}
@@ -309,8 +310,7 @@ export class BHttpDecoder {
 		len = 0;
 		terminator = this.decodeVli(ctx);
 		while (terminator !== 0) {
-			// ctx.content.set(new Uint8Array(ctx.buf, ctx.p, terminator), len);
-			ctx.content.set(ctx.buf.slice(ctx.p, ctx.p + terminator), len);
+			ctx.content.set(ctx.buf.subarray(ctx.p, ctx.p + terminator), len);
 			len += terminator;
 			ctx.p += terminator;
 			terminator = this.decodeVli(ctx);
@@ -357,8 +357,9 @@ export class BHttpDecoder {
 
 	private decodeVliAndValue(ctx: DecoderContext): string {
 		const len = this.decodeVli(ctx);
-		// const res = this._td.decode(new Uint8Array(ctx.buf, ctx.p, len));
-		const res = this._td.decode(ctx.buf.slice(ctx.p, ctx.p + len));
+		// TextDecoder does not retain the input, so a view is safe and avoids a
+		// copy on every header/control/trailer field.
+		const res = this._td.decode(ctx.buf.subarray(ctx.p, ctx.p + len));
 		ctx.p += len;
 		return res;
 	}
