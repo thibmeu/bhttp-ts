@@ -10,7 +10,7 @@ Released 2026-03-13
 - Add VLI utilities export
 - Require Node.js >= 22
 - Use vitest for testing
-- Use tsup for bundling
+- Use tsdown for bundling
 - Use biome for linting/formatting
 
 ## Version 0.3.6
