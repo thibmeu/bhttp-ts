@@ -90,7 +90,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - uses: fastly/compute-actions/setup@v6
+      - uses: fastly/compute-actions/setup@v13
       - name: Run sample on Fastly Compute (Viceroy)
         working-directory: samples/fastly
         run: |
