@@ -2,9 +2,9 @@ name: Cloudflare Workers CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 permissions:
   contents: read
@@ -13,22 +13,17 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: denoland/setup-deno@v1
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          deno-version: 2.x
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.x
-      - name: Run dnt
-        run: deno run -A dnt.ts 0.0.0
-      - name: Run npm pack
-        working-directory: ./npm
-        run: npm pack
-      - name: Run test
-        working-directory: ./test/runtimes/cloudflare
+          node-version: 24
+          cache: npm
+      # Build the package so the sample can resolve `bhttp-ts` (file:../..).
+      - run: npm ci
+      - run: npm run build
+      # Run the sample's tests on the Workers runtime (vitest-pool-workers).
+      - name: Run tests on Workers runtime
+        working-directory: samples/cloudflare
         run: |
           npm install
-          nohup npm start &
-          sleep 3
-          deno test bhttp.spec.ts --allow-net --config ../../../deno.json
+          npx vitest run

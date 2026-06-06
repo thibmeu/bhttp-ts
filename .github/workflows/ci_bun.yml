@@ -1,10 +1,10 @@
-name: bun CI
+name: Bun CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 permissions:
   contents: read
@@ -12,28 +12,20 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        bun-version: [latest]
-
     steps:
-      - uses: actions/checkout@v4
-      - uses: denoland/setup-deno@v1
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          deno-version: 2.x
-      - uses: antongolub/action-setup-bun@v1
-        with:
-          bun-version: ${{ matrix.bun-version }}
-      - name: Run dnt
-        run: deno run -A dnt.ts 0.0.0
-      - name: Run npm pack
-        working-directory: ./npm
-        run: npm pack
-      - name: Run test
-        working-directory: ./test/runtimes/bun
+          node-version: 24
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+      # Build the package so the sample can resolve `bhttp-ts` (file:../..).
+      - run: npm ci
+      - run: npm run build
+      # Run the samples on the Bun runtime as a smoke test.
+      - name: Run samples on Bun
+        working-directory: samples/node
         run: |
           bun install
-          nohup bun run src/index.ts &
-          sleep 3
-          deno test bhttp.spec.ts --allow-net --config ../../../deno.json
+          bun app.js
+          bun streaming.js

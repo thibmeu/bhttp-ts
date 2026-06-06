@@ -2,32 +2,27 @@ name: Publish
 
 on:
   release:
-    types: [created]
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22.x
-          registry-url: https://registry.npmjs.org/
-      - uses: denoland/setup-deno@v1
-        with:
-          deno-version: 2.x
-      - name: Run dnt & minify
-        run: |
-          npm install -g esbuild
-          deno task dnt
-          deno task minify > ./npm/bhttp.min.js
-      - name: Run deno publish
-        run: |
-          npx jsr publish
-      - working-directory: ./npm
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      # Publishes via npm trusted publishing (OIDC). No NPM_TOKEN needed:
+      # the id-token permission above lets npm mint a short-lived token and
+      # attach provenance automatically. A trusted publisher for this repo +
+      # workflow must be configured once on npmjs.com.
+      - run: npm publish --access public

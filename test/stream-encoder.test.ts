@@ -80,9 +80,9 @@ describe("BHttpRequestStreamEncoder", () => {
 		const encoder = new BHttpRequestStreamEncoder();
 		encoder.encodePreamble("GET", "https", "example.com", "/", new Headers());
 
-		expect(() =>
-			encoder.encodePreamble("GET", "https", "example.com", "/", new Headers()),
-		).toThrow("Preamble already encoded");
+		expect(() => encoder.encodePreamble("GET", "https", "example.com", "/", new Headers())).toThrow(
+			"Preamble already encoded",
+		);
 	});
 
 	it("throws if chunk encoded before preamble", () => {

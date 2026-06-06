@@ -1,0 +1,10 @@
+# Fastly Compute manifest for the bhttp-ts sample.
+# `fastly compute serve` runs this locally under Viceroy (no API token needed).
+authors = ["thibmeu"]
+description = "bhttp-ts Fastly Compute sample"
+language = "javascript"
+manifest_version = 3
+name = "bhttp-fastly-sample"
+
+[scripts]
+build = "npm run build"
