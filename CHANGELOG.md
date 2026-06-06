@@ -1,5 +1,14 @@
 # Changes
 
+## Unreleased
+
+- Test CI against a Node.js 24 + 26 matrix
+- Add multi-runtime CI (Bun, Cloudflare Workers, Fastly Compute, browser via Vitest)
+- Add a Fastly Compute sample under `samples/fastly`
+- Publish to npm via trusted publishing (OIDC); drop the stored npm token
+- Bump CodeQL and GitHub Actions to current major versions
+- Track GitHub Actions with Dependabot
+
 ## Version 0.4.1
 
 Released 2026-06-06
