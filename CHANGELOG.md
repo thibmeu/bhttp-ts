@@ -2,7 +2,7 @@
 
 ## Version 0.4.4
 
-Unreleased
+Released 2026-06-08
 
 - Accept truncated messages as required by RFC 9292 Section 3.8. The decoder and
   streaming decoder now read an omitted empty trailer section (and omitted empty
