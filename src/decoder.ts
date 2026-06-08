@@ -285,6 +285,9 @@ export class BHttpDecoder {
 	}
 
 	private decodeKnownLengthContent(ctx: DecoderContext) {
+		if (this.isAtEnd(ctx)) {
+			return;
+		}
 		const len = this.decodeVli(ctx);
 		// View into the input buffer; createRequest/createResponse copies it once
 		// into an owned buffer, so an extra copy here would be redundant.
@@ -294,6 +297,9 @@ export class BHttpDecoder {
 	}
 
 	private decodeIndeterminateLengthContent(ctx: DecoderContext) {
+		if (this.isAtEnd(ctx)) {
+			return;
+		}
 		let len = 0;
 		const p = ctx.p;
 		let terminator = this.decodeVli(ctx);
@@ -319,6 +325,9 @@ export class BHttpDecoder {
 	}
 
 	private decodeKnownLengthTrailers(ctx: DecoderContext) {
+		if (this.isAtEnd(ctx)) {
+			return;
+		}
 		const len = this.decodeVli(ctx);
 		let name = "";
 		let value = "";
@@ -332,6 +341,9 @@ export class BHttpDecoder {
 	}
 
 	private decodeIndeterminateLengthTrailers(ctx: DecoderContext) {
+		if (this.isAtEnd(ctx)) {
+			return;
+		}
 		let name = "";
 		let value = "";
 		let terminator = this.decodeVli(ctx);
@@ -343,6 +355,15 @@ export class BHttpDecoder {
 			terminator = this.decodeVli(ctx);
 		}
 		return;
+	}
+
+	// RFC 9292 Section 3.8 lets the encoder drop an empty trailer section, plus an
+	// empty content section when the trailers are dropped too. A decoder reads
+	// those missing fields as a length of zero. Only the trailing sections can go;
+	// a message cut off anywhere earlier (mid control data or headers) is invalid,
+	// so only the content and trailer decoders check isAtEnd().
+	private isAtEnd(ctx: DecoderContext): boolean {
+		return ctx.p >= ctx.buf.byteLength;
 	}
 
 	private checkPadding(ctx: DecoderContext) {

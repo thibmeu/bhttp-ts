@@ -215,6 +215,22 @@ describe("BHttpStreamDecoder", () => {
 			expect(preambleEvent.status).toBe(201);
 			expect(preambleEvent.headers.get("x-custom")).toBe("value");
 		});
+
+		// RFC 9292 Section 3.8: a missing trailer section is read as empty, so end()
+		// still completes.
+		it("decodes a known-length response whose empty trailer section is omitted", async () => {
+			const encoder = new BHttpEncoder();
+			const full = await encoder.encodeResponse(new Response("Response body", { status: 201 }));
+			// The final byte is the trailer length VLI (0); drop it to simulate truncation.
+			const truncated = full.subarray(0, full.length - 1);
+
+			const decoder = new BHttpStreamDecoder();
+			const events = decoder.push(truncated);
+			const endEvents = decoder.end();
+
+			expect(events[0]?.type).toBe("response-preamble");
+			expect([...events, ...endEvents].some((e) => e.type === "end")).toBe(true);
+		});
 	});
 
 	describe("error handling", () => {
@@ -228,12 +244,29 @@ describe("BHttpStreamDecoder", () => {
 		it("throws on incomplete message at end()", () => {
 			const encoder = new BHttpRequestStreamEncoder();
 			const preamble = encoder.encodePreamble("GET", "https", "example.com", "/", new Headers());
-			// Don't include end
+			// Cut the message off mid control data. Only the trailing content and
+			// trailer sections may be dropped (RFC 9292 Section 3.8); a message cut
+			// off anywhere else is invalid.
+			const partial = preamble.subarray(0, 3);
 
 			const decoder = new BHttpStreamDecoder();
-			decoder.push(preamble);
+			decoder.push(partial);
 
 			expect(() => decoder.end()).toThrow("Incomplete message");
+		});
+
+		// RFC 9292 Section 3.8: a message can omit empty content when the trailers
+		// are empty too, so a preamble with no content or trailer section is a valid
+		// truncated message, not an incomplete one.
+		it("completes when content and trailers are omitted", () => {
+			const encoder = new BHttpRequestStreamEncoder();
+			const preamble = encoder.encodePreamble("GET", "https", "example.com", "/", new Headers());
+
+			const decoder = new BHttpStreamDecoder();
+			const events = decoder.push(preamble);
+			const endEvents = decoder.end();
+
+			expect([...events, ...endEvents].some((e) => e.type === "end")).toBe(true);
 		});
 
 		it("throws if push called after end", () => {

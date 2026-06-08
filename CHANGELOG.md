@@ -1,5 +1,15 @@
 # Changes
 
+## Version 0.4.4
+
+Unreleased
+
+- Accept truncated messages as required by RFC 9292 Section 3.8. The decoder and
+  streaming decoder now read an omitted empty trailer section (and omitted empty
+  content when the trailers are dropped too) as zero-length, instead of throwing
+  "Unexpected end of buffer" or "Incomplete message". Truncation anywhere else,
+  such as mid control data or headers, is still rejected as invalid.
+
 ## Version 0.4.3
 
 Released 2026-06-06

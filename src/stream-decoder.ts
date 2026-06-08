@@ -186,6 +186,22 @@ export class BHttpStreamDecoder {
 			return [];
 		}
 
+		// RFC 9292 Section 3.8 lets the encoder drop an empty trailer section, plus
+		// an empty content section when the trailers are dropped too. So if the
+		// input ends while we are still waiting on the content or trailer section
+		// and never read its length or terminator, treat it as empty and finish.
+		// Anything cut off earlier (mid control data or headers) is invalid and
+		// still throws below, and so does a section that started reading its length
+		// but never delivered the bytes.
+		const atIndeterminateBoundary =
+			this._phase === "content-indeterminate" || this._phase === "trailers-indeterminate";
+		const atKnownBoundary =
+			(this._phase === "content-known" || this._phase === "trailers-known") &&
+			!this._knownSectionLenRead;
+		if (atIndeterminateBoundary || atKnownBoundary) {
+			this._phase = "padding";
+		}
+
 		// Check padding
 		if (this._phase === "padding") {
 			while (this._offset < this._buffer.length) {
