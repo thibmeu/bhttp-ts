@@ -317,9 +317,21 @@ describe("BHttpStreamDecoder", () => {
 			allEvents.push(...decoder.push(full.subarray(start)));
 			allEvents.push(...decoder.end());
 
-			// Verify we got all expected events
+			// Verify we got all expected events. Content may arrive as several
+			// events (bytes are emitted as they arrive, not buffered per chunk);
+			// what matters is the concatenated byte stream.
 			expect(allEvents.filter((e) => e.type === "response-preamble").length).toBe(1);
-			expect(allEvents.filter((e) => e.type === "content").length).toBe(1);
+			const content = allEvents.filter(
+				(e): e is BHttpContentEvent => e.type === "content",
+			);
+			expect(content.length).toBeGreaterThanOrEqual(1);
+			const joined = new Uint8Array(content.reduce((sum, e) => sum + e.data.length, 0));
+			let offset = 0;
+			for (const e of content) {
+				joined.set(e.data, offset);
+				offset += e.data.length;
+			}
+			expect(new TextDecoder().decode(joined)).toBe("Test content");
 			expect(allEvents.filter((e) => e.type === "end").length).toBe(1);
 		});
 	});

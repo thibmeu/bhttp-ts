@@ -50,8 +50,11 @@ export interface BHttpInformationalEvent {
 
 export interface BHttpContentEvent {
 	readonly type: "content";
-	/** Content bytes. May be a view into a buffer passed to push(); valid as
-	 * long as the caller does not mutate buffers it has pushed. */
+	/** Content bytes. Events form a byte stream: one encoded content chunk may
+	 * surface as several events (bytes are emitted as they arrive rather than
+	 * buffered until the chunk completes), so chunk boundaries are not
+	 * preserved. May be a view into a buffer passed to push(); valid as long
+	 * as the caller does not mutate buffers it has pushed. */
 	readonly data: Uint8Array;
 }
 
@@ -122,6 +125,9 @@ export class BHttpStreamDecoder {
 	private _knownSectionLen = 0;
 	private _knownSectionEnd = 0;
 	private _knownSectionLenRead = false;
+
+	// Bytes of the current indeterminate-length content chunk not yet emitted
+	private _contentRemaining = 0;
 
 	// Accumulated headers/trailers
 	private _headers = new Headers();
@@ -207,7 +213,8 @@ export class BHttpStreamDecoder {
 		// still throws below, and so does a section that started reading its length
 		// but never delivered the bytes.
 		const atIndeterminateBoundary =
-			this._phase === "content-indeterminate" || this._phase === "trailers-indeterminate";
+			(this._phase === "content-indeterminate" && this._contentRemaining === 0) ||
+			this._phase === "trailers-indeterminate";
 		const atKnownBoundary =
 			(this._phase === "content-known" || this._phase === "trailers-known") &&
 			!this._knownSectionLenRead;
@@ -537,43 +544,49 @@ export class BHttpStreamDecoder {
 			}
 		}
 
-		// Check if we have all content bytes
-		if (this._buffer.length < this._knownSectionEnd) {
+		// Emit whatever content bytes have arrived (a view, not a copy; see
+		// push()). Waiting for the whole section would re-copy the growing
+		// remainder on every push: O(n^2) for sections larger than the pushes.
+		const end = Math.min(this._buffer.length, this._knownSectionEnd);
+		if (end <= this._offset) {
 			return undefined;
 		}
-
-		// Emit content event (a view into the buffer, not a copy; see push())
-		const data = this._buffer.subarray(this._offset, this._knownSectionEnd);
-		this._offset = this._knownSectionEnd;
-		this._phase = "trailers-known";
-		this._knownSectionLenRead = false;
+		const data = this._buffer.subarray(this._offset, end);
+		this._offset = end;
+		if (this._offset === this._knownSectionEnd) {
+			this._phase = "trailers-known";
+			this._knownSectionLenRead = false;
+		}
 
 		return { type: "content", data };
 	}
 
 	private _processContentIndeterminate(): BHttpContentEvent | null | undefined {
-		const lenResult = decodeVli(this._buffer, this._offset);
-		if (lenResult === undefined) return undefined;
+		if (this._contentRemaining === 0) {
+			const lenResult = decodeVli(this._buffer, this._offset);
+			if (lenResult === undefined) return undefined;
 
-		if (lenResult.value === 0) {
-			// Terminator - move to trailers
+			if (lenResult.value === 0) {
+				// Terminator - move to trailers
+				this._offset += lenResult.bytesRead;
+				this._phase = "trailers-indeterminate";
+				return null;
+			}
+
+			this._contentRemaining = lenResult.value;
 			this._offset += lenResult.bytesRead;
-			this._phase = "trailers-indeterminate";
-			return null;
 		}
 
-		const chunkLen = lenResult.value;
-		const chunkStart = this._offset + lenResult.bytesRead;
-		const chunkEnd = chunkStart + chunkLen;
-
-		if (this._buffer.length < chunkEnd) {
-			// Not enough data for full chunk
+		// Emit whatever bytes of the chunk have arrived (a view, not a copy; see
+		// push()). Waiting for the whole chunk would re-copy the growing
+		// remainder on every push: O(n^2) for chunks larger than the pushes.
+		const take = Math.min(this._buffer.length - this._offset, this._contentRemaining);
+		if (take === 0) {
 			return undefined;
 		}
-
-		this._offset = chunkEnd;
-		// A view into the buffer, not a copy; see push()
-		const data = this._buffer.subarray(chunkStart, chunkEnd);
+		const data = this._buffer.subarray(this._offset, this._offset + take);
+		this._offset += take;
+		this._contentRemaining -= take;
 
 		return { type: "content", data };
 	}
