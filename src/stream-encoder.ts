@@ -122,11 +122,28 @@ export class BHttpRequestStreamEncoder {
 	}
 
 	/**
-	 * Encode a content chunk.
+	 * Encode a content chunk as a single buffer (copies `data` once).
+	 *
+	 * Prefer {@link encodeContentChunkParts} when the destination accepts
+	 * multiple writes (e.g. a stream): it skips the copy.
 	 *
 	 * @param data - Chunk data (must be non-empty)
 	 */
 	encodeContentChunk(data: Uint8Array): Uint8Array {
+		const [lenVli, bytes] = this.encodeContentChunkParts(data);
+		const result = new Uint8Array(lenVli.length + bytes.length);
+		result.set(lenVli);
+		result.set(bytes, lenVli.length);
+		return result;
+	}
+
+	/**
+	 * Encode a content chunk as its wire parts, without copying the data:
+	 * the VLI length prefix and `data` itself, to be written in order.
+	 *
+	 * @param data - Chunk data (must be non-empty); returned as-is (aliased)
+	 */
+	encodeContentChunkParts(data: Uint8Array): [Uint8Array, Uint8Array] {
 		if (!this._preambleEncoded) {
 			throw new Error("Preamble must be encoded first");
 		}
@@ -137,11 +154,7 @@ export class BHttpRequestStreamEncoder {
 			throw new Error("Content chunk cannot be empty");
 		}
 
-		const lenVli = encodeVli(data.length);
-		const result = new Uint8Array(lenVli.length + data.length);
-		result.set(lenVli);
-		result.set(data, lenVli.length);
-		return result;
+		return [encodeVli(data.length), data];
 	}
 
 	/**
@@ -253,11 +266,28 @@ export class BHttpResponseStreamEncoder {
 	}
 
 	/**
-	 * Encode a content chunk.
+	 * Encode a content chunk as a single buffer (copies `data` once).
+	 *
+	 * Prefer {@link encodeContentChunkParts} when the destination accepts
+	 * multiple writes (e.g. a stream): it skips the copy.
 	 *
 	 * @param data - Chunk data (must be non-empty)
 	 */
 	encodeContentChunk(data: Uint8Array): Uint8Array {
+		const [lenVli, bytes] = this.encodeContentChunkParts(data);
+		const result = new Uint8Array(lenVli.length + bytes.length);
+		result.set(lenVli);
+		result.set(bytes, lenVli.length);
+		return result;
+	}
+
+	/**
+	 * Encode a content chunk as its wire parts, without copying the data:
+	 * the VLI length prefix and `data` itself, to be written in order.
+	 *
+	 * @param data - Chunk data (must be non-empty); returned as-is (aliased)
+	 */
+	encodeContentChunkParts(data: Uint8Array): [Uint8Array, Uint8Array] {
 		if (!this._preambleEncoded) {
 			throw new Error("Preamble must be encoded first");
 		}
@@ -268,11 +298,7 @@ export class BHttpResponseStreamEncoder {
 			throw new Error("Content chunk cannot be empty");
 		}
 
-		const lenVli = encodeVli(data.length);
-		const result = new Uint8Array(lenVli.length + data.length);
-		result.set(lenVli);
-		result.set(data, lenVli.length);
-		return result;
+		return [encodeVli(data.length), data];
 	}
 
 	/**

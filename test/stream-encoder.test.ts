@@ -111,6 +111,45 @@ describe("BHttpRequestStreamEncoder", () => {
 			"Content chunk cannot be empty",
 		);
 	});
+
+	it("encodeContentChunkParts frames without copying the data", async () => {
+		const encoder = new BHttpRequestStreamEncoder();
+		const headers = new Headers({ "content-type": "text/plain" });
+		const preamble = encoder.encodePreamble("POST", "https", "example.com", "/api", headers);
+
+		const chunk = new TextEncoder().encode("Hello, World!");
+		const [prefix, data] = encoder.encodeContentChunkParts(chunk);
+		expect(data).toBe(chunk); // aliased, not copied
+
+		// prefix + data must be wire-identical to encodeContentChunk's output
+		const end = encoder.encodeEnd();
+		const parts = [preamble, prefix, data, end];
+		const full = new Uint8Array(parts.reduce((sum, p) => sum + p.length, 0));
+		let offset = 0;
+		for (const part of parts) {
+			full.set(part, offset);
+			offset += part.length;
+		}
+
+		const decoder = new BHttpDecoder();
+		const request = decoder.decodeRequest(full);
+		expect(await request.text()).toBe("Hello, World!");
+	});
+
+	it("encodeContentChunkParts enforces the same state checks", () => {
+		const encoder = new BHttpRequestStreamEncoder();
+		expect(() => encoder.encodeContentChunkParts(new Uint8Array([1]))).toThrow(
+			"Preamble must be encoded first",
+		);
+		encoder.encodePreamble("GET", "https", "example.com", "/", new Headers());
+		expect(() => encoder.encodeContentChunkParts(new Uint8Array(0))).toThrow(
+			"Content chunk cannot be empty",
+		);
+		encoder.encodeEnd();
+		expect(() => encoder.encodeContentChunkParts(new Uint8Array([1]))).toThrow(
+			"Encoding already ended",
+		);
+	});
 });
 
 describe("BHttpResponseStreamEncoder", () => {

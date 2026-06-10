@@ -50,6 +50,8 @@ export interface BHttpInformationalEvent {
 
 export interface BHttpContentEvent {
 	readonly type: "content";
+	/** Content bytes. May be a view into a buffer passed to push(); valid as
+	 * long as the caller does not mutate buffers it has pushed. */
 	readonly data: Uint8Array;
 }
 
@@ -132,6 +134,11 @@ export class BHttpStreamDecoder {
 	/**
 	 * Push bytes into the decoder and get parsed events.
 	 *
+	 * The decoder holds `data` by reference until it is consumed, and emitted
+	 * content events may be views into it — the caller must not mutate or reuse
+	 * a pushed buffer afterwards (copy first when filling a fixed read buffer,
+	 * e.g. with a BYOB reader).
+	 *
 	 * @param data - Incoming bytes
 	 * @returns Array of parsed events (may be empty if more data needed)
 	 */
@@ -140,21 +147,27 @@ export class BHttpStreamDecoder {
 			throw new Error("Decoder already finished");
 		}
 
-		// Append to buffer, dropping the already-consumed prefix first. Without
-		// this, every push copies the entire accumulated history (consumed bytes
-		// included), making chunked decode O(n^2) in the number of pushes.
-		// Compacting keeps each copy proportional to the unconsumed remainder.
 		if (data.length > 0) {
 			const remaining = this._buffer.length - this._offset;
-			const newBuf = new Uint8Array(remaining + data.length);
-			newBuf.set(this._buffer.subarray(this._offset), 0);
-			newBuf.set(data, remaining);
-			this._buffer = newBuf;
 			// Rebase persisted absolute offsets by the dropped prefix. _offset and
 			// _knownSectionEnd are the only positions that survive across pushes;
 			// _knownSectionEnd is stale (and recomputed) while _knownSectionLenRead
 			// is false, so rebasing it unconditionally is safe.
 			this._knownSectionEnd -= this._offset;
+			if (remaining === 0) {
+				// Previous buffer fully consumed (the common case when pushes keep
+				// pace with parsing): adopt the incoming buffer without copying.
+				this._buffer = data;
+			} else {
+				// A field spans pushes: copy the unconsumed remainder + new data.
+				// Dropping the consumed prefix keeps each copy proportional to the
+				// remainder; carrying it forward would make chunked decode O(n^2)
+				// in the number of pushes.
+				const newBuf = new Uint8Array(remaining + data.length);
+				newBuf.set(this._buffer.subarray(this._offset), 0);
+				newBuf.set(data, remaining);
+				this._buffer = newBuf;
+			}
 			this._offset = 0;
 		}
 
@@ -529,8 +542,8 @@ export class BHttpStreamDecoder {
 			return undefined;
 		}
 
-		// Emit content event
-		const data = this._buffer.slice(this._offset, this._knownSectionEnd);
+		// Emit content event (a view into the buffer, not a copy; see push())
+		const data = this._buffer.subarray(this._offset, this._knownSectionEnd);
 		this._offset = this._knownSectionEnd;
 		this._phase = "trailers-known";
 		this._knownSectionLenRead = false;
@@ -559,7 +572,8 @@ export class BHttpStreamDecoder {
 		}
 
 		this._offset = chunkEnd;
-		const data = this._buffer.slice(chunkStart, chunkEnd);
+		// A view into the buffer, not a copy; see push()
+		const data = this._buffer.subarray(chunkStart, chunkEnd);
 
 		return { type: "content", data };
 	}
