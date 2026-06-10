@@ -1,5 +1,23 @@
 # Changes
 
+## Version 0.4.5
+
+Released 2026-06-10
+
+- Improve streaming decoder performance: `push()` adopts the incoming buffer by
+  reference when the previous one is fully consumed, instead of copying every
+  pushed buffer, and content events are `subarray` views into it. Callers must
+  not mutate a buffer after pushing it.
+- Emit content bytes as they arrive instead of buffering until an encoded
+  content chunk is contiguous, which re-copied the growing remainder on every
+  push (O(n²) for chunks larger than the pushes). One encoded chunk may now
+  surface as several content events, so chunk boundaries are not preserved; a
+  message that ends mid-chunk fails as incomplete rather than as invalid
+  padding.
+- Add `encodeContentChunkParts()` to the streaming encoders: returns the VLI
+  length prefix and the data as two parts, skipping the full-body copy of
+  `encodeContentChunk()`.
+
 ## Version 0.4.4
 
 Released 2026-06-08
