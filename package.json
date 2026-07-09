@@ -64,9 +64,14 @@
 		"@vitest/browser": "^4.1.8",
 		"@vitest/browser-playwright": "^4.1.8",
 		"playwright": "^1.60.0",
-		"tsdown": "^0.22.1",
-		"typescript": "^6.0.3",
+		"tsdown": "^0.22.4",
+		"typescript": "^7.0.2",
 		"vitest": "^4.1.8"
+	},
+	"overrides": {
+		"tsdown": {
+			"typescript": "$typescript"
+		}
 	},
 	"engines": {
 		"node": ">=22"
