@@ -1,5 +1,16 @@
 # Changes
 
+## Unreleased
+
+- Run the full test suite inside workerd via `@cloudflare/vitest-pool-workers`
+  (`npm run test:workers`). The `cloudflare` CI job only ran the sample's single
+  round-trip smoke test, so none of the 74 library tests had ever executed on
+  the Workers runtime. All 74 pass; the sample still runs after them, since it
+  covers the published-package-inside-a-Worker path the suite does not.
+- Drop `engines: node >=22`. An npm-enforced Node assertion says little on a
+  library whose supported runtimes are Workers, Fastly Compute, browsers, and
+  Bun, all of which CI exercises directly.
+
 ## Version 0.5.0
 
 Released 2026-08-18
