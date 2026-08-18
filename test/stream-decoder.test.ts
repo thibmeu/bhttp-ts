@@ -334,3 +334,71 @@ describe("BHttpStreamDecoder", () => {
 		});
 	});
 });
+
+describe("known-length messages split mid-headers", () => {
+	const collect = (decoder: BHttpStreamDecoder, chunks: Uint8Array[]): BHttpEvent[] => {
+		const events: BHttpEvent[] = [];
+		for (const c of chunks) events.push(...decoder.push(c));
+		events.push(...decoder.end());
+		return events;
+	};
+
+	// Content arrives as a byte stream, so event counts vary with the split;
+	// compare the reassembled message instead.
+	const summarise = (events: BHttpEvent[]) => {
+		const preamble = events.find(
+			(e) => e.type === "request-preamble" || e.type === "response-preamble",
+		) as BHttpRequestPreambleEvent | BHttpResponsePreambleEvent | undefined;
+		const body = events
+			.filter((e): e is BHttpContentEvent => e.type === "content")
+			.map((e) => new TextDecoder().decode(e.data))
+			.join("");
+		return JSON.stringify({
+			preamble: preamble && { ...preamble, headers: [...preamble.headers].sort() },
+			body,
+			ended: events.some((e) => e.type === "end"),
+		});
+	};
+
+	it("decodes identically at every split point", async () => {
+		const bytes = new Uint8Array(
+			await new BHttpEncoder().encodeRequest(
+				new Request("https://example.com/x", {
+					method: "POST",
+					body: "hello",
+					headers: { "x-k": "v" },
+				}),
+			),
+		);
+
+		const reference = summarise(collect(new BHttpStreamDecoder(), [bytes]));
+		expect(reference).toContain('"body":"hello"');
+		expect(reference).toContain("x-k");
+
+		for (let split = 1; split < bytes.length; split++) {
+			const events = collect(new BHttpStreamDecoder(), [
+				bytes.subarray(0, split),
+				bytes.subarray(split),
+			]);
+			expect(summarise(events), `split at ${split}`).toBe(reference);
+		}
+	});
+
+	it("decodes a known-length message fed one byte at a time", async () => {
+		const bytes = new Uint8Array(
+			await new BHttpEncoder().encodeResponse(
+				new Response("hello", { status: 404, headers: { "x-k": "v" } }),
+			),
+		);
+
+		const events = collect(
+			new BHttpStreamDecoder(),
+			Array.from(bytes, (b) => new Uint8Array([b])),
+		);
+		expect(summarise(events)).toBe(summarise(collect(new BHttpStreamDecoder(), [bytes])));
+
+		const preamble = events.find((e) => e.type === "response-preamble");
+		expect(preamble).toMatchObject({ status: 404 });
+		expect((preamble as BHttpResponsePreambleEvent).headers.get("x-k")).toBe("v");
+	});
+});

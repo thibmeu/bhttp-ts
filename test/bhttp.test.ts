@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { BHttpDecoder } from "../src/decoder";
 import { BHttpEncoder } from "../src/encoder";
+import { InvalidMessageError, NotSupportedError } from "../src/errors";
+import { BHttpStreamDecoder } from "../src/stream-decoder";
 
 describe("BHttpDecoder/Encoder", () => {
 	describe("GET", () => {
@@ -168,5 +170,42 @@ describe("BHttpDecoder/Encoder", () => {
 			expect(req.headers.get("content-type")?.startsWith("text/plain")).toBe(true);
 			expect(await req.text()).toBe("");
 		});
+	});
+});
+
+describe("VLI error classification", () => {
+	// A VLI of 2^32 is well-formed under RFC 9292, which allows values to
+	// 2^62-1; it is only beyond what this package can represent. That is
+	// NotSupportedError, distinct from a peer sending an invalid message.
+	const overMaxVli = new Uint8Array([
+		0x00, 0xc0, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x50, 0x4f, 0x53, 0x54,
+	]);
+	const truncated = new Uint8Array([0x00, 0x04, 0x50, 0x4f]);
+
+	it("reports an over-large VLI as NotSupportedError", () => {
+		expect(() => new BHttpDecoder().decodeRequest(overMaxVli)).toThrow(NotSupportedError);
+	});
+
+	it("reports a truncated message as InvalidMessageError", () => {
+		expect(() => new BHttpDecoder().decodeRequest(truncated)).toThrow(InvalidMessageError);
+	});
+
+	it("reports an over-large VLI from the streaming decoder as NotSupportedError", () => {
+		expect(() => new BHttpStreamDecoder().push(overMaxVli)).toThrow(NotSupportedError);
+	});
+
+	it("attaches the underlying error as cause", () => {
+		let caught: unknown;
+		try {
+			new BHttpDecoder().decodeRequest(overMaxVli);
+		} catch (e) {
+			caught = e;
+		}
+		expect((caught as Error).cause).toBeInstanceOf(Error);
+	});
+
+	it("does not leak quicvarint's wording into the message", () => {
+		expect(() => new BHttpDecoder().decodeRequest(overMaxVli)).toThrow(/is not supported/);
+		expect(() => new BHttpDecoder().decodeRequest(truncated)).toThrow("Unexpected end of buffer");
 	});
 });

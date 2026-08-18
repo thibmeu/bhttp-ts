@@ -1,4 +1,4 @@
-import * as consts from "./consts";
+import { tryReadFrom, MAX as VLI_MAX } from "quicvarint";
 import * as errors from "./errors";
 
 class InformationalResponse {
@@ -386,51 +386,19 @@ export class BHttpDecoder {
 	}
 
 	private decodeVli(ctx: DecoderContext): number {
-		let res = 0;
-		const firstByte = ctx.buf[ctx.p];
-		if (firstByte === undefined) {
+		// tryReadFrom separates the two failures: undefined for a VLI the buffer
+		// cuts short, throw for one whose value this package cannot represent.
+		let value: number | undefined;
+		try {
+			value = tryReadFrom(ctx);
+		} catch (e) {
+			throw new errors.NotSupportedError(`Over ${VLI_MAX}-length value is not supported.`, {
+				cause: e,
+			});
+		}
+		if (value === undefined) {
 			throw new errors.InvalidMessageError("Unexpected end of buffer");
 		}
-
-		switch (firstByte & consts.VLI_MASK_VALUE) {
-			case consts.VLI_LEN_1:
-				ctx.p++;
-				return firstByte & consts.VLI_MASK_HEADER;
-
-			case consts.VLI_LEN_2:
-				res = (firstByte & consts.VLI_MASK_HEADER) << 8;
-				ctx.p++;
-				res += ctx.buf[ctx.p++] ?? 0;
-				return res;
-
-			case consts.VLI_LEN_4:
-				res = (firstByte & consts.VLI_MASK_HEADER) << 24;
-				ctx.p++;
-				res += (ctx.buf[ctx.p++] ?? 0) << 16;
-				res += (ctx.buf[ctx.p++] ?? 0) << 8;
-				res += ctx.buf[ctx.p++] ?? 0;
-				return res;
-
-			default: {
-				// consts.VLI_LEN_8
-				// res = (ctx.buf[ctx.p++] & consts.VLI_MASK_HEADER) << 56;
-				res = 0;
-				ctx.p++;
-				const nextByte = ctx.buf[ctx.p];
-				if (nextByte !== undefined && nextByte > 15) {
-					throw new errors.NotSupportedError(
-						"Over MAX_SAFE_INTEGER-length value is not supported.",
-					);
-				}
-				res += (ctx.buf[ctx.p++] ?? 0) << 48;
-				res += (ctx.buf[ctx.p++] ?? 0) << 40;
-				res += (ctx.buf[ctx.p++] ?? 0) << 32;
-				res += (ctx.buf[ctx.p++] ?? 0) << 24;
-				res += (ctx.buf[ctx.p++] ?? 0) << 16;
-				res += (ctx.buf[ctx.p++] ?? 0) << 8;
-				res += ctx.buf[ctx.p++] ?? 0;
-				return res;
-			}
-		}
+		return value;
 	}
 }

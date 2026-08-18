@@ -1,11 +1,8 @@
 /**
- * Variable-Length Integer utilities for streaming decode.
- *
- * quicvarint throws on insufficient bytes; this module provides
- * decodeVli() which returns undefined instead (streaming-friendly).
+ * Variable-Length Integer utilities.
  */
 
-import { encode, length, MAX, MIN, decode as quicDecode } from "quicvarint";
+import { encode, length, MAX, MIN, tryReadFrom } from "quicvarint";
 
 export { encode as encodeVli, length as vliEncodedLength, MAX, MIN };
 
@@ -22,18 +19,16 @@ export interface VliDecodeResult {
 /**
  * Decode a VLI from buffer at offset.
  *
- * Returns undefined if not enough bytes available (enables streaming).
- * Throws if value exceeds MAX.
+ * Returns undefined if not enough bytes are available (enables streaming).
+ *
+ * @throws if the encoded value exceeds {@link MAX}.
  */
 export function decodeVli(buf: Uint8Array, offset: number): VliDecodeResult | undefined {
 	if (offset >= buf.length) {
 		return undefined;
 	}
 
-	try {
-		const result = quicDecode(buf.subarray(offset));
-		return { value: result.value, bytesRead: result.usize };
-	} catch {
-		return undefined;
-	}
+	const cursor = { buf, p: offset };
+	const value = tryReadFrom(cursor);
+	return value === undefined ? undefined : { value, bytesRead: cursor.p - offset };
 }
