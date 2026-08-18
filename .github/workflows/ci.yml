@@ -81,8 +81,9 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run test:workers
       - run: npm run build
-      - name: Run tests on Workers runtime
+      - name: Run the sample on the Workers runtime
         working-directory: samples/cloudflare
         run: |
           npm install
