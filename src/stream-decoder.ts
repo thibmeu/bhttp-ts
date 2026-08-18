@@ -5,8 +5,10 @@
  * Supports both known-length (0/1) and indeterminate-length (2/3) messages.
  */
 
-import { InvalidMessageError } from "./errors";
-import { decodeVli } from "./vli";
+import { type Cursor, tryReadFrom, MAX as VLI_MAX } from "quicvarint";
+import { InvalidMessageError, NotSupportedError } from "./errors";
+
+const EMPTY = new Uint8Array(0);
 
 // Framing indicators
 const FRAMING_REQUEST_KNOWN = 0;
@@ -266,12 +268,31 @@ export class BHttpStreamDecoder {
 		}
 	}
 
-	private _processFraming(): null | undefined {
-		const result = decodeVli(this._buffer, this._offset);
-		if (result === undefined) return undefined;
+	private _vli: Cursor = { buf: EMPTY, p: 0 };
 
-		const framing = result.value;
-		this._offset += result.bytesRead;
+	/**
+	 * Read the VLI at `_offset` without consuming it. `_vli.p` is left pointing
+	 * just past it, so a caller that keeps the value assigns `_offset = _vli.p`.
+	 *
+	 * Returns undefined when the buffer ends mid-VLI. A VLI above quicvarint's
+	 * MAX throws, since no amount of further data makes it valid.
+	 */
+	private _peekVli(): number | undefined {
+		this._vli.buf = this._buffer;
+		this._vli.p = this._offset;
+		try {
+			return tryReadFrom(this._vli);
+		} catch (e) {
+			throw new NotSupportedError(`Over ${VLI_MAX}-length value is not supported.`, {
+				cause: e,
+			});
+		}
+	}
+
+	private _processFraming(): null | undefined {
+		const framing = this._peekVli();
+		if (framing === undefined) return undefined;
+		this._offset = this._vli.p;
 
 		switch (framing) {
 			case FRAMING_REQUEST_KNOWN:
@@ -337,11 +358,9 @@ export class BHttpStreamDecoder {
 	private _processResponseStatus(): BHttpInformationalEvent | null | undefined {
 		const saveOffset = this._offset;
 
-		const result = decodeVli(this._buffer, this._offset);
-		if (result === undefined) return undefined;
-
-		const status = result.value;
-		this._offset += result.bytesRead;
+		const status = this._peekVli();
+		if (status === undefined) return undefined;
+		this._offset = this._vli.p;
 
 		// Check for informational response (1xx)
 		if (status >= 100 && status < 200) {
@@ -398,6 +417,7 @@ export class BHttpStreamDecoder {
 		if (!complete) {
 			this._offset = saveOffset;
 			this._headers = saveHeaders;
+			this._knownSectionLenRead = false;
 			return undefined;
 		}
 
@@ -436,10 +456,10 @@ export class BHttpStreamDecoder {
 	private _tryParseKnownLengthHeaders(): boolean {
 		// Read the headers length if not yet read
 		if (!this._knownSectionLenRead) {
-			const lenResult = decodeVli(this._buffer, this._offset);
-			if (lenResult === undefined) return false;
-			this._knownSectionLen = lenResult.value;
-			this._offset += lenResult.bytesRead;
+			const sectionLen = this._peekVli();
+			if (sectionLen === undefined) return false;
+			this._knownSectionLen = sectionLen;
+			this._offset = this._vli.p;
 			this._knownSectionEnd = this._offset + this._knownSectionLen;
 			this._knownSectionLenRead = true;
 		}
@@ -491,12 +511,12 @@ export class BHttpStreamDecoder {
 			}
 
 			// Try to read next name length (or terminator)
-			const lenResult = decodeVli(this._buffer, this._offset);
-			if (lenResult === undefined) return false;
+			const nameLen = this._peekVli();
+			if (nameLen === undefined) return false;
 
-			if (lenResult.value === 0) {
+			if (nameLen === 0) {
 				// Terminator
-				this._offset += lenResult.bytesRead;
+				this._offset = this._vli.p;
 				return true;
 			}
 
@@ -530,10 +550,10 @@ export class BHttpStreamDecoder {
 	private _processContentKnown(): BHttpContentEvent | null | undefined {
 		// Read the content length if not yet read
 		if (!this._knownSectionLenRead) {
-			const lenResult = decodeVli(this._buffer, this._offset);
-			if (lenResult === undefined) return undefined;
-			this._knownSectionLen = lenResult.value;
-			this._offset += lenResult.bytesRead;
+			const sectionLen = this._peekVli();
+			if (sectionLen === undefined) return undefined;
+			this._knownSectionLen = sectionLen;
+			this._offset = this._vli.p;
 			this._knownSectionEnd = this._offset + this._knownSectionLen;
 			this._knownSectionLenRead = true;
 
@@ -563,18 +583,18 @@ export class BHttpStreamDecoder {
 
 	private _processContentIndeterminate(): BHttpContentEvent | null | undefined {
 		if (this._contentRemaining === 0) {
-			const lenResult = decodeVli(this._buffer, this._offset);
-			if (lenResult === undefined) return undefined;
+			const chunkLen = this._peekVli();
+			if (chunkLen === undefined) return undefined;
 
-			if (lenResult.value === 0) {
+			if (chunkLen === 0) {
 				// Terminator - move to trailers
-				this._offset += lenResult.bytesRead;
+				this._offset = this._vli.p;
 				this._phase = "trailers-indeterminate";
 				return null;
 			}
 
-			this._contentRemaining = lenResult.value;
-			this._offset += lenResult.bytesRead;
+			this._contentRemaining = chunkLen;
+			this._offset = this._vli.p;
 		}
 
 		// Emit whatever bytes of the chunk have arrived (a view, not a copy; see
@@ -596,10 +616,10 @@ export class BHttpStreamDecoder {
 
 		// Read the trailers length if not yet read
 		if (!this._knownSectionLenRead) {
-			const lenResult = decodeVli(this._buffer, this._offset);
-			if (lenResult === undefined) return undefined;
-			this._knownSectionLen = lenResult.value;
-			this._offset += lenResult.bytesRead;
+			const sectionLen = this._peekVli();
+			if (sectionLen === undefined) return undefined;
+			this._knownSectionLen = sectionLen;
+			this._offset = this._vli.p;
 			this._knownSectionEnd = this._offset + this._knownSectionLen;
 			this._knownSectionLenRead = true;
 
@@ -646,15 +666,15 @@ export class BHttpStreamDecoder {
 		let hasTrailers = false;
 
 		while (true) {
-			const lenResult = decodeVli(this._buffer, this._offset);
-			if (lenResult === undefined) {
+			const nameLen = this._peekVli();
+			if (nameLen === undefined) {
 				this._offset = saveOffset;
 				return undefined;
 			}
 
-			if (lenResult.value === 0) {
+			if (nameLen === 0) {
 				// Terminator
-				this._offset += lenResult.bytesRead;
+				this._offset = this._vli.p;
 				break;
 			}
 
@@ -687,11 +707,10 @@ export class BHttpStreamDecoder {
 	 * Does NOT rollback offset on failure - caller must handle.
 	 */
 	private _tryDecodeVliString(): string | undefined {
-		const lenResult = decodeVli(this._buffer, this._offset);
-		if (lenResult === undefined) return undefined;
+		const strLen = this._peekVli();
+		if (strLen === undefined) return undefined;
 
-		const strLen = lenResult.value;
-		const strStart = this._offset + lenResult.bytesRead;
+		const strStart = this._vli.p;
 		const strEnd = strStart + strLen;
 
 		if (this._buffer.length < strEnd) {

@@ -84,3 +84,28 @@ describe("VLI", () => {
 		});
 	});
 });
+
+describe("8-byte VLI values are bounded, never wrapped", () => {
+	it("rejects encoding above MAX instead of corrupting", () => {
+		expect(() => encodeVli(MAX + 1)).toThrow();
+		expect(() => encodeVli(2 ** 32)).toThrow();
+		expect(() => encodeVli(5e9)).toThrow();
+		expect(() => vliEncodedLength(2 ** 40)).toThrow();
+	});
+
+	it("round-trips the largest encodable value", () => {
+		const encoded = encodeVli(MAX);
+		expect(decodeVli(encoded, 0)).toEqual({ value: MAX, bytesRead: encoded.length });
+	});
+
+	it("throws on an over-MAX wire value rather than reporting it as incomplete", () => {
+		const overMax = new Uint8Array([0xc0, 0, 0, 0, 0x80, 0, 0, 0]); // 2^31
+		expect(() => decodeVli(overMax, 0)).toThrow();
+		const twoPow40 = new Uint8Array([0xc0, 0, 0x01, 0, 0, 0, 0, 0]);
+		expect(() => decodeVli(twoPow40, 0)).toThrow();
+	});
+
+	it("still reports a genuinely truncated VLI as incomplete", () => {
+		expect(decodeVli(new Uint8Array([0xc0, 0, 0]), 0)).toBeUndefined();
+	});
+});

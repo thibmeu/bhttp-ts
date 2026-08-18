@@ -1,5 +1,36 @@
 # Changes
 
+## Version 0.5.0
+
+Released 2026-08-18
+
+- Route all variable-length integer encoding and decoding through quicvarint
+  0.2.0, removing the three local implementations (the decoder's, the encoder's,
+  and the encoder's length calculation). All three assembled 8-byte values by
+  shifting, and JS bitwise operators truncate to int32, so values at or above
+  2^32 were silently corrupted rather than rejected: `encodeVli(5e9)` emitted
+  bytes that decode to roughly 1.67e15, and `2^32` decoded as `1`.
+- Reject VLI values above 2^31-1 instead of corrupting them. The encoder
+  previously claimed to accept lengths up to `Number.MAX_SAFE_INTEGER`, so the
+  largest encodable field drops from a nominal 2^53 to 2 GiB — but every value
+  past 2^32 was already being written wrong.
+- `decodeVli()` now throws on a value above the maximum instead of returning
+  `undefined`. An incremental caller reads `undefined` as "need more bytes", so
+  a malformed length stalled the stream rather than rejecting the message.
+- Read VLIs in the streaming decoder through a reusable cursor rather than
+  allocating a subarray and a result object per read. Stream decode is 2-35%
+  faster depending on message shape.
+- Fix the streaming decoder losing track of a known-length headers section when
+  a push ends inside it. The rollback restored the read offset but left the
+  section length marked as already read, so the next push parsed that length as
+  a header-name length and ran names and values together — a raw `TypeError`
+  from `Headers.set`, not a `BHttpError`. Every known-length message split
+  anywhere in its headers was affected, including any fed byte by byte.
+- Report a VLI larger than this package supports as `NotSupportedError` rather
+  than `InvalidMessageError`. RFC 9292 allows values to 2^62-1, so an
+  over-large VLI is a well-formed message this package cannot represent, not a
+  malformed one. Errors carry the underlying failure as `cause`.
+
 ## Version 0.4.5
 
 Released 2026-06-10

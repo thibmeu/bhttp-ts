@@ -1,4 +1,4 @@
-import * as consts from "./consts";
+import { MAX as VLI_MAX, MIN as VLI_MIN, length as vliLength, writeTo } from "quicvarint";
 import * as errors from "./errors";
 
 // Shared UTF-8 encoder. Strings are encoded to bytes once during setup() so
@@ -22,19 +22,13 @@ class EncoderContext {
 	}
 
 	protected calculateVliSize(v: number): number {
-		if (v < 64) {
-			return 1;
+		try {
+			return vliLength(v);
+		} catch (e) {
+			throw new errors.NotSupportedError(`Over ${VLI_MAX}-length value is not supported.`, {
+				cause: e,
+			});
 		}
-		if (v < 16384) {
-			return 2;
-		}
-		if (v < 1073741824) {
-			return 4;
-		}
-		if (v <= Number.MAX_SAFE_INTEGER) {
-			return 8;
-		}
-		throw new errors.NotSupportedError("Over MAX_SAFE_INTEGER length value is not supported.");
 	}
 
 	// Bytes needed to encode a VLI-prefixed byte string.
@@ -226,34 +220,12 @@ export class BHttpEncoder {
 	}
 
 	private encodeVli(ctx: EncoderContext, v: number) {
-		if (v < 64) {
-			ctx.buf[ctx.p++] = consts.VLI_LEN_1 + v;
-			return;
+		// Range-check here rather than catching, so a writeTo overflow -- which
+		// means this encoder mis-sized its own buffer -- is not relabelled as
+		// unsupported input.
+		if (v < VLI_MIN || v > VLI_MAX) {
+			throw new errors.NotSupportedError(`Over ${VLI_MAX}-length value is not supported.`);
 		}
-		if (v < 16384) {
-			ctx.buf[ctx.p++] = consts.VLI_LEN_2 + (v >> 8);
-			ctx.buf[ctx.p++] = consts.VLI_MASK_LSB & v;
-			return;
-		}
-		if (v < 1073741824) {
-			ctx.buf[ctx.p++] = consts.VLI_LEN_4 + (v >> 24);
-			ctx.buf[ctx.p++] = consts.VLI_MASK_LSB & (v >> 16);
-			ctx.buf[ctx.p++] = consts.VLI_MASK_LSB & (v >> 8);
-			ctx.buf[ctx.p++] = consts.VLI_MASK_LSB & v;
-			return;
-		}
-		if (v <= Number.MAX_SAFE_INTEGER) {
-			// ctx.buf[ctx.p++] = consts.VLI_LEN_8 + (v >> 56);
-			ctx.buf[ctx.p++] = consts.VLI_LEN_8;
-			ctx.buf[ctx.p++] = consts.VLI_MASK_LSB & (v >> 48);
-			ctx.buf[ctx.p++] = consts.VLI_MASK_LSB & (v >> 40);
-			ctx.buf[ctx.p++] = consts.VLI_MASK_LSB & (v >> 32);
-			ctx.buf[ctx.p++] = consts.VLI_MASK_LSB & (v >> 24);
-			ctx.buf[ctx.p++] = consts.VLI_MASK_LSB & (v >> 16);
-			ctx.buf[ctx.p++] = consts.VLI_MASK_LSB & (v >> 8);
-			ctx.buf[ctx.p++] = consts.VLI_MASK_LSB & v;
-			return;
-		}
-		throw new errors.NotSupportedError("Over MAX_SAFE_INTEGER-length value is not supported.");
+		writeTo(ctx, v);
 	}
 }
