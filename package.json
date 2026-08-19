@@ -20,10 +20,11 @@
 		}
 	},
 	"files": [
-		"dist"
+		"dist",
+		"src"
 	],
 	"scripts": {
-		"build": "tsdown --format esm,cjs --sourcemap --target es2022",
+		"build": "tsdown",
 		"bench": "vitest bench",
 		"test": "vitest run",
 		"test:watch": "vitest",
