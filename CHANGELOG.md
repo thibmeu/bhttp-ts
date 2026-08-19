@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## Version 0.5.1
+
+Released 2026-08-19
+
+- Update quicvarint to 0.2.1. Packaging only: it ships `src/` once instead of
+  inlining the sources into every sourcemap. The emitted JS is unchanged.
 - Run the suite in workerd (`npm run test:workers`). The cloudflare job only ran
   the sample's smoke test, so none of the 74 tests had ever run there. They pass.
 - Drop `engines: node >=22`. CI tests the runtimes directly.

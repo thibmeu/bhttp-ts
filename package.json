@@ -1,6 +1,6 @@
 {
 	"name": "bhttp-ts",
-	"version": "0.5.0",
+	"version": "0.5.1",
 	"description": "BHTTP (RFC 9292) encoder and decoder for the Fetch API Request/Response interface",
 	"type": "module",
 	"sideEffects": false,
@@ -59,7 +59,7 @@
 	},
 	"homepage": "https://github.com/thibmeu/bhttp-ts#readme",
 	"dependencies": {
-		"quicvarint": "^0.2.0"
+		"quicvarint": "^0.2.1"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.16",
