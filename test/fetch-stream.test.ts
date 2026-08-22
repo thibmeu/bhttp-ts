@@ -4,8 +4,10 @@ import { BHttpDecoder } from "../src/decoder";
 import { BHttpEncoder } from "../src/encoder";
 import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "../src/stream-encoder";
 
+const supportsStreamingRequestBodies = await hasStreamingRequestBodies();
+
 describe("Fetch streaming API", () => {
-	it("should round-trip a streaming Request", async () => {
+	it.skipIf(!supportsStreamingRequestBodies)("should round-trip a streaming Request", async () => {
 		// Arrange
 		const encoder = new BHttpEncoder();
 		const decoder = new BHttpDecoder();
@@ -44,46 +46,52 @@ describe("Fetch streaming API", () => {
 		expect(await decoded.text()).toBe("hello");
 	});
 
-	it("should keep encoding read-ahead bounded and propagate cancellation", async () => {
-		// Arrange
-		const source = finiteBody(100);
-		const request = new Request("https://example.com/upload", {
-			method: "POST",
-			body: source.stream,
-			duplex: "half",
-		} as RequestInit & { duplex: "half" });
+	it.skipIf(!supportsStreamingRequestBodies)(
+		"should keep encoding read-ahead bounded and propagate cancellation",
+		async () => {
+			// Arrange
+			const source = finiteBody(100);
+			const request = new Request("https://example.com/upload", {
+				method: "POST",
+				body: source.stream,
+				duplex: "half",
+			} as RequestInit & { duplex: "half" });
 
-		// Act
-		const encoded = new BHttpEncoder().encodeRequestStream(request);
-		await new Promise((resolve) => setTimeout(resolve, 50));
+			// Act
+			const encoded = new BHttpEncoder().encodeRequestStream(request);
+			await new Promise((resolve) => setTimeout(resolve, 50));
 
-		// Assert
-		expect(source.pulls).toBeLessThanOrEqual(2);
-		await encoded.cancel("consumer stopped");
-		expect(source.cancelled).toBe(true);
-	});
+			// Assert
+			expect(source.pulls).toBeLessThanOrEqual(2);
+			await encoded.cancel("consumer stopped");
+			expect(source.cancelled).toBe(true);
+		},
+	);
 
-	it("should keep decoding read-ahead bounded and propagate cancellation", async () => {
-		// Arrange
-		const encoder = new BHttpRequestStreamEncoder();
-		const preamble = encoder.encodePreamble(
-			"POST",
-			"https",
-			"example.com",
-			"/upload",
-			new Headers(),
-		);
-		const source = framedBody(preamble, encoder, 100);
+	it.skipIf(!supportsStreamingRequestBodies)(
+		"should keep decoding read-ahead bounded and propagate cancellation",
+		async () => {
+			// Arrange
+			const encoder = new BHttpRequestStreamEncoder();
+			const preamble = encoder.encodePreamble(
+				"POST",
+				"https",
+				"example.com",
+				"/upload",
+				new Headers(),
+			);
+			const source = framedBody(preamble, encoder, 100);
 
-		// Act
-		const request = await new BHttpDecoder().decodeRequestStream(source.stream);
-		await new Promise((resolve) => setTimeout(resolve, 50));
+			// Act
+			const request = await new BHttpDecoder().decodeRequestStream(source.stream);
+			await new Promise((resolve) => setTimeout(resolve, 50));
 
-		// Assert
-		expect(source.pulls).toBeLessThanOrEqual(3);
-		await request.body?.cancel("consumer stopped");
-		expect(source.cancelled).toBe(true);
-	});
+			// Assert
+			expect(source.pulls).toBeLessThanOrEqual(3);
+			await request.body?.cancel("consumer stopped");
+			expect(source.cancelled).toBe(true);
+		},
+	);
 
 	it.each([
 		["GET request", () => requestPreamble("GET")],
@@ -155,6 +163,20 @@ describe("Fetch streaming API", () => {
 });
 
 // Helpers
+
+async function hasStreamingRequestBodies(): Promise<boolean> {
+	const expected = "streaming-request-body";
+	try {
+		const request = new Request("https://example.com/upload", {
+			method: "POST",
+			body: streamOf(new TextEncoder().encode(expected)),
+			duplex: "half",
+		} as RequestInit & { duplex: "half" });
+		return (await request.text()) === expected;
+	} catch {
+		return false;
+	}
+}
 
 function streamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
 	return new ReadableStream({

@@ -89,7 +89,7 @@ jobs:
           npm install
           npx vitest run
 
-  # Run the suite in a real Chromium via Vitest browser mode.
+  # Run the suite in real Chromium and Firefox browsers via Vitest browser mode.
   browser:
     runs-on: ubuntu-latest
     steps:
@@ -99,7 +99,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npx playwright install chromium --with-deps
+      - run: npx playwright install chromium firefox --with-deps
       - run: npm run test:browser
 
   # Run the sample on the Fastly Compute runtime (local Viceroy, no API token).
