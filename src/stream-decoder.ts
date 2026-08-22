@@ -6,7 +6,7 @@
  */
 
 import { type Cursor, tryReadFrom, MAX as VLI_MAX } from "quicvarint";
-import { InvalidMessageError, NotSupportedError } from "./errors";
+import { InvalidMessageError, MetadataLimitExceededError, NotSupportedError } from "./errors";
 
 const EMPTY = new Uint8Array(0);
 
@@ -17,6 +17,22 @@ const FRAMING_REQUEST_INDETERMINATE = 2;
 const FRAMING_RESPONSE_INDETERMINATE = 3;
 
 const textDecoder = new TextDecoder();
+
+/** Default maximum encoded non-content bytes accepted in one message. */
+export const DEFAULT_MAX_METADATA_SIZE = 64 * 1024;
+
+export interface BHttpStreamDecoderOptions {
+	/**
+	 * Maximum total encoded non-content bytes accepted in one message.
+	 *
+	 * This includes request control data, response status and informational
+	 * responses, header fields, trailers, and their length encodings. Content
+	 * and padding are excluded.
+	 *
+	 * @default 65536
+	 */
+	readonly maxMetadataSize?: number;
+}
 
 /**
  * Events emitted by the streaming decoder.
@@ -134,6 +150,25 @@ export class BHttpStreamDecoder {
 	// Accumulated headers/trailers
 	private _headers = new Headers();
 	private _pendingHeaderName: string | null = null;
+	private readonly _maxMetadataSize: number;
+	private _metadataBytes = 0;
+
+	constructor(options: BHttpStreamDecoderOptions = {}) {
+		const maxMetadataSize = options.maxMetadataSize ?? DEFAULT_MAX_METADATA_SIZE;
+		if (!Number.isSafeInteger(maxMetadataSize) || maxMetadataSize < 0) {
+			throw new RangeError(
+				`maxMetadataSize must be a non-negative integer, got ${maxMetadataSize}`,
+			);
+		}
+		this._maxMetadataSize = maxMetadataSize;
+	}
+
+	private _chargeMetadata(bytes: number): void {
+		if (this._metadataBytes + bytes > this._maxMetadataSize) {
+			throw new MetadataLimitExceededError("BHTTP metadata exceeds the configured limit");
+		}
+		this._metadataBytes += bytes;
+	}
 
 	private _shouldContinueProcessing(): boolean {
 		return this._phase !== "done" && this._phase !== "padding";
@@ -290,9 +325,11 @@ export class BHttpStreamDecoder {
 	}
 
 	private _processFraming(): null | undefined {
+		const start = this._offset;
 		const framing = this._peekVli();
 		if (framing === undefined) return undefined;
 		this._offset = this._vli.p;
+		this._chargeMetadata(this._offset - start);
 
 		switch (framing) {
 			case FRAMING_REQUEST_KNOWN:
@@ -357,10 +394,12 @@ export class BHttpStreamDecoder {
 
 	private _processResponseStatus(): BHttpInformationalEvent | null | undefined {
 		const saveOffset = this._offset;
+		const saveMetadataBytes = this._metadataBytes;
 
 		const status = this._peekVli();
 		if (status === undefined) return undefined;
 		this._offset = this._vli.p;
+		this._chargeMetadata(this._offset - saveOffset);
 
 		// Check for informational response (1xx)
 		if (status >= 100 && status < 200) {
@@ -377,6 +416,7 @@ export class BHttpStreamDecoder {
 				this._headers = new Headers();
 				this._knownSectionLenRead = false;
 				this._pendingHeaderName = null;
+				this._metadataBytes = saveMetadataBytes;
 				return undefined;
 			}
 
@@ -408,6 +448,7 @@ export class BHttpStreamDecoder {
 		| null
 		| undefined {
 		const saveOffset = this._offset;
+		const saveMetadataBytes = this._metadataBytes;
 		const saveHeaders = new Headers();
 		this._headers.forEach((v, k) => {
 			saveHeaders.set(k, v);
@@ -418,6 +459,7 @@ export class BHttpStreamDecoder {
 			this._offset = saveOffset;
 			this._headers = saveHeaders;
 			this._knownSectionLenRead = false;
+			this._metadataBytes = saveMetadataBytes;
 			return undefined;
 		}
 
@@ -433,6 +475,7 @@ export class BHttpStreamDecoder {
 		| null
 		| undefined {
 		const saveOffset = this._offset;
+		const saveMetadataBytes = this._metadataBytes;
 		const saveHeaders = new Headers();
 		this._headers.forEach((v, k) => {
 			saveHeaders.set(k, v);
@@ -444,6 +487,7 @@ export class BHttpStreamDecoder {
 			this._offset = saveOffset;
 			this._headers = saveHeaders;
 			this._pendingHeaderName = savePendingName;
+			this._metadataBytes = saveMetadataBytes;
 			return undefined;
 		}
 
@@ -456,8 +500,10 @@ export class BHttpStreamDecoder {
 	private _tryParseKnownLengthHeaders(): boolean {
 		// Read the headers length if not yet read
 		if (!this._knownSectionLenRead) {
+			const lengthStart = this._offset;
 			const sectionLen = this._peekVli();
 			if (sectionLen === undefined) return false;
+			this._chargeMetadata(this._vli.p - lengthStart + sectionLen);
 			this._knownSectionLen = sectionLen;
 			this._offset = this._vli.p;
 			this._knownSectionEnd = this._offset + this._knownSectionLen;
@@ -471,9 +517,9 @@ export class BHttpStreamDecoder {
 
 		// Parse headers until we reach the end
 		while (this._offset < this._knownSectionEnd) {
-			const name = this._tryDecodeVliString();
+			const name = this._tryDecodeVliString(false);
 			if (name === undefined) return false;
-			const value = this._tryDecodeVliString();
+			const value = this._tryDecodeVliString(false);
 			if (value === undefined) return false;
 
 			if (
@@ -516,6 +562,7 @@ export class BHttpStreamDecoder {
 
 			if (nameLen === 0) {
 				// Terminator
+				this._chargeMetadata(this._vli.p - this._offset);
 				this._offset = this._vli.p;
 				return true;
 			}
@@ -613,11 +660,14 @@ export class BHttpStreamDecoder {
 
 	private _processTrailersKnown(): BHttpTrailersEvent | null | undefined {
 		const saveOffset = this._offset;
+		const saveMetadataBytes = this._metadataBytes;
 
 		// Read the trailers length if not yet read
 		if (!this._knownSectionLenRead) {
+			const lengthStart = this._offset;
 			const sectionLen = this._peekVli();
 			if (sectionLen === undefined) return undefined;
+			this._chargeMetadata(this._vli.p - lengthStart + sectionLen);
 			this._knownSectionLen = sectionLen;
 			this._offset = this._vli.p;
 			this._knownSectionEnd = this._offset + this._knownSectionLen;
@@ -634,19 +684,20 @@ export class BHttpStreamDecoder {
 		if (this._buffer.length < this._knownSectionEnd) {
 			this._offset = saveOffset;
 			this._knownSectionLenRead = false;
+			this._metadataBytes = saveMetadataBytes;
 			return undefined;
 		}
 
 		// Parse trailers
 		const trailers = new Headers();
 		while (this._offset < this._knownSectionEnd) {
-			const name = this._tryDecodeVliString();
+			const name = this._tryDecodeVliString(false);
 			if (name === undefined) {
 				this._offset = saveOffset;
 				this._knownSectionLenRead = false;
 				return undefined;
 			}
-			const value = this._tryDecodeVliString();
+			const value = this._tryDecodeVliString(false);
 			if (value === undefined) {
 				this._offset = saveOffset;
 				this._knownSectionLenRead = false;
@@ -662,6 +713,7 @@ export class BHttpStreamDecoder {
 
 	private _processTrailersIndeterminate(): BHttpTrailersEvent | null | undefined {
 		const saveOffset = this._offset;
+		const saveMetadataBytes = this._metadataBytes;
 		const trailers = new Headers();
 		let hasTrailers = false;
 
@@ -669,11 +721,13 @@ export class BHttpStreamDecoder {
 			const nameLen = this._peekVli();
 			if (nameLen === undefined) {
 				this._offset = saveOffset;
+				this._metadataBytes = saveMetadataBytes;
 				return undefined;
 			}
 
 			if (nameLen === 0) {
 				// Terminator
+				this._chargeMetadata(this._vli.p - this._offset);
 				this._offset = this._vli.p;
 				break;
 			}
@@ -681,11 +735,13 @@ export class BHttpStreamDecoder {
 			const name = this._tryDecodeVliString();
 			if (name === undefined) {
 				this._offset = saveOffset;
+				this._metadataBytes = saveMetadataBytes;
 				return undefined;
 			}
 			const value = this._tryDecodeVliString();
 			if (value === undefined) {
 				this._offset = saveOffset;
+				this._metadataBytes = saveMetadataBytes;
 				return undefined;
 			}
 			trailers.set(name, value);
@@ -706,7 +762,8 @@ export class BHttpStreamDecoder {
 	 * Try to decode a VLI-prefixed string. Returns undefined if not enough data.
 	 * Does NOT rollback offset on failure - caller must handle.
 	 */
-	private _tryDecodeVliString(): string | undefined {
+	private _tryDecodeVliString(chargeMetadata = true): string | undefined {
+		const start = this._offset;
 		const strLen = this._peekVli();
 		if (strLen === undefined) return undefined;
 
@@ -717,6 +774,9 @@ export class BHttpStreamDecoder {
 			return undefined;
 		}
 
+		if (chargeMetadata) {
+			this._chargeMetadata(strEnd - start);
+		}
 		const str = textDecoder.decode(this._buffer.subarray(strStart, strEnd));
 		this._offset = strEnd;
 		return str;
