@@ -1,5 +1,6 @@
 import { MAX as VLI_MAX, MIN as VLI_MIN, length as vliLength, writeTo } from "quicvarint";
 import * as errors from "./errors";
+import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "./stream-encoder";
 
 // Shared UTF-8 encoder. Strings are encoded to bytes once during setup() so
 // that lengths and offsets are computed in UTF-8 bytes (not UTF-16 code units),
@@ -157,6 +158,83 @@ export class BHttpEncoder {
 
 		// Do BHTTP encoding.
 		return this.encodeKnownLengthResponse(ctx);
+	}
+
+	/** Encode a Request as an indeterminate-length, backpressure-aware BHTTP stream. */
+	public encodeRequestStream(src: Request): ReadableStream<Uint8Array> {
+		const url = new URL(src.url);
+		const encoder = new BHttpRequestStreamEncoder();
+		return this.encodeStream(
+			encoder.encodePreamble(
+				src.method,
+				url.protocol.slice(0, -1),
+				url.host,
+				url.pathname + url.search,
+				src.headers,
+			),
+			src.body,
+			encoder,
+		);
+	}
+
+	/** Encode a Response as an indeterminate-length, backpressure-aware BHTTP stream. */
+	public encodeResponseStream(src: Response): ReadableStream<Uint8Array> {
+		const encoder = new BHttpResponseStreamEncoder();
+		return this.encodeStream(encoder.encodePreamble(src.status, src.headers), src.body, encoder);
+	}
+
+	private encodeStream(
+		preamble: Uint8Array,
+		body: ReadableStream<Uint8Array> | null,
+		encoder: {
+			encodeContentChunkParts(chunk: Uint8Array): [Uint8Array, Uint8Array];
+			encodeEnd(): Uint8Array;
+		},
+	): ReadableStream<Uint8Array> {
+		const reader = body?.getReader();
+		let released = false;
+		const release = () => {
+			if (released || reader === undefined) return;
+			released = true;
+			reader.releaseLock();
+		};
+
+		return new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(preamble);
+			},
+			async pull(controller) {
+				try {
+					if (reader !== undefined) {
+						const { done, value } = await reader.read();
+						if (!done) {
+							if (value.length > 0) {
+								const [prefix, data] = encoder.encodeContentChunkParts(value);
+								controller.enqueue(prefix);
+								controller.enqueue(data);
+							}
+							return;
+						}
+					}
+					release();
+					controller.enqueue(encoder.encodeEnd());
+					controller.close();
+				} catch (error) {
+					try {
+						await reader?.cancel(error);
+					} catch {}
+					release();
+					throw error;
+				}
+			},
+			async cancel(reason) {
+				try {
+					await reader?.cancel(reason);
+				} finally {
+					release();
+				}
+			},
+		});
 	}
 
 	private encodeKnownLengthRequest(ctx: RequestEncoderContext): Uint8Array {

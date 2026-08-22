@@ -1,5 +1,6 @@
 import { tryReadFrom, MAX as VLI_MAX } from "quicvarint";
 import * as errors from "./errors";
+import { BHttpStreamDecoder, type BHttpStreamDecoderOptions } from "./stream-decoder";
 
 class InformationalResponse {
 	public status: number;
@@ -110,6 +111,37 @@ export class BHttpDecoder {
 			default:
 				throw new errors.InvalidMessageError("Invalid framing indicator.");
 		}
+	}
+
+	/** Decode a BHTTP byte stream into a Request whose body remains streaming. */
+	public async decodeRequestStream(
+		src: ReadableStream<Uint8Array>,
+		options: BHttpStreamDecoderOptions = {},
+	): Promise<Request> {
+		const decoded = await decodeStream(src, "request", options);
+		const bodyless =
+			decoded.method.toUpperCase() === "GET" || decoded.method.toUpperCase() === "HEAD";
+		if (bodyless) await decoded.body.cancel();
+		return new Request(`${decoded.scheme}://${decoded.authority}${decoded.path}`, {
+			method: decoded.method,
+			headers: decoded.headers,
+			body: bodyless ? null : decoded.body,
+			duplex: "half",
+		} as RequestInit & { duplex: "half" });
+	}
+
+	/** Decode a BHTTP byte stream into a Response whose body remains streaming. */
+	public async decodeResponseStream(
+		src: ReadableStream<Uint8Array>,
+		options: BHttpStreamDecoderOptions = {},
+	): Promise<Response> {
+		const decoded = await decodeStream(src, "response", options);
+		const bodyless = decoded.status === 204 || decoded.status === 304;
+		if (bodyless) await decoded.body.cancel();
+		return new Response(bodyless ? null : decoded.body, {
+			status: decoded.status,
+			headers: decoded.headers,
+		});
 	}
 
 	private decodeKnownLengthRequest(ctx: RequestDecoderContext): Request {
@@ -401,4 +433,120 @@ export class BHttpDecoder {
 		}
 		return value;
 	}
+}
+
+interface DecodedRequestStream {
+	readonly method: string;
+	readonly scheme: string;
+	readonly authority: string;
+	readonly path: string;
+	readonly headers: Headers;
+	readonly body: ReadableStream<Uint8Array>;
+}
+
+interface DecodedResponseStream {
+	readonly status: number;
+	readonly headers: Headers;
+	readonly body: ReadableStream<Uint8Array>;
+}
+
+type RequestStreamPreamble = Omit<DecodedRequestStream, "body">;
+type ResponseStreamPreamble = Omit<DecodedResponseStream, "body">;
+
+function decodeStream(
+	src: ReadableStream<Uint8Array>,
+	kind: "request",
+	options: BHttpStreamDecoderOptions,
+): Promise<DecodedRequestStream>;
+function decodeStream(
+	src: ReadableStream<Uint8Array>,
+	kind: "response",
+	options: BHttpStreamDecoderOptions,
+): Promise<DecodedResponseStream>;
+async function decodeStream(
+	src: ReadableStream<Uint8Array>,
+	kind: "request" | "response",
+	options: BHttpStreamDecoderOptions,
+): Promise<DecodedRequestStream | DecodedResponseStream> {
+	const decoder = new BHttpStreamDecoder(options);
+	const reader = src.getReader();
+	let preamble: RequestStreamPreamble | ResponseStreamPreamble | undefined;
+	const pending: Uint8Array[] = [];
+	let released = false;
+	const release = () => {
+		if (released) return;
+		released = true;
+		reader.releaseLock();
+	};
+
+	try {
+		while (preamble === undefined) {
+			const { done, value } = await reader.read();
+			if (done) throw new errors.InvalidMessageError("Missing BHTTP preamble");
+			for (const event of decoder.push(value)) {
+				if (event.type === "content") pending.push(event.data);
+				else if (event.type === "request-preamble" && kind === "request") {
+					preamble = {
+						method: event.method,
+						scheme: event.scheme,
+						authority: event.authority,
+						path: event.path,
+						headers: event.headers,
+					};
+				} else if (event.type === "response-preamble" && kind === "response") {
+					preamble = { status: event.status, headers: event.headers };
+				} else if (event.type === "request-preamble" || event.type === "response-preamble") {
+					throw new errors.InvalidMessageError(`Expected a BHTTP ${kind}`);
+				}
+			}
+		}
+	} catch (error) {
+		try {
+			await reader.cancel(error);
+		} catch {}
+		release();
+		throw error;
+	}
+
+	const body = new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const chunk of pending) controller.enqueue(chunk);
+		},
+		async pull(controller) {
+			try {
+				for (;;) {
+					const { done, value } = await reader.read();
+					if (done) {
+						decoder.end();
+						release();
+						controller.close();
+						return;
+					}
+					let emitted = false;
+					for (const event of decoder.push(value)) {
+						if (event.type === "content") {
+							controller.enqueue(event.data);
+							emitted = true;
+						}
+					}
+					if (emitted) return;
+				}
+			} catch (error) {
+				try {
+					await reader.cancel(error);
+				} catch {}
+				release();
+				throw error;
+			}
+		},
+		async cancel(reason) {
+			try {
+				await reader.cancel(reason);
+			} finally {
+				release();
+			}
+		},
+	});
+
+	return { ...preamble, body } as DecodedRequestStream | DecodedResponseStream;
 }
