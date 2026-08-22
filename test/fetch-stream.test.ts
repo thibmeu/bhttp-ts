@@ -89,6 +89,7 @@ describe("Fetch streaming API", () => {
 		["GET request", () => requestPreamble("GET")],
 		["HEAD request", () => requestPreamble("HEAD")],
 		["204 response", () => responsePreamble(204)],
+		["205 response", () => responsePreamble(205)],
 		["304 response", () => responsePreamble(304)],
 	])("should cancel the input for a bodyless %s", async (_name, preamble) => {
 		// Arrange
@@ -103,6 +104,24 @@ describe("Fetch streaming API", () => {
 
 		// Assert
 		expect(source.cancelled).toBe(true);
+		expect(source.stream.locked).toBe(false);
+	});
+
+	it.each([
+		["CONNECT request", () => requestPreamble("CONNECT")],
+		["invalid response status", invalidResponsePreamble],
+	])("should cancel the input when constructing an %s fails", async (name, preamble) => {
+		// Arrange
+		const source = bodylessMessage(preamble());
+
+		// Act / Assert
+		if (name.endsWith("request")) {
+			await expect(new BHttpDecoder().decodeRequestStream(source.stream)).rejects.toThrow();
+		} else {
+			await expect(new BHttpDecoder().decodeResponseStream(source.stream)).rejects.toThrow();
+		}
+		expect(source.cancelled).toBe(true);
+		expect(source.stream.locked).toBe(false);
 	});
 
 	it("should reject a response when a request is expected", async () => {
@@ -206,6 +225,11 @@ function requestPreamble(method: string): Uint8Array {
 
 function responsePreamble(status: number): Uint8Array {
 	return new BHttpResponseStreamEncoder().encodePreamble(status, new Headers());
+}
+
+function invalidResponsePreamble(): Uint8Array {
+	// Indeterminate response, final status 700, empty headers.
+	return new Uint8Array([3, 0x42, 0xbc, 0]);
 }
 
 function bodylessMessage(preamble: Uint8Array) {

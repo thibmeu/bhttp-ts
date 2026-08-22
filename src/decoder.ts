@@ -122,12 +122,19 @@ export class BHttpDecoder {
 		const bodyless =
 			decoded.method.toUpperCase() === "GET" || decoded.method.toUpperCase() === "HEAD";
 		if (bodyless) await decoded.body.cancel();
-		return new Request(`${decoded.scheme}://${decoded.authority}${decoded.path}`, {
-			method: decoded.method,
-			headers: decoded.headers,
-			body: bodyless ? null : decoded.body,
-			duplex: "half",
-		} as RequestInit & { duplex: "half" });
+		try {
+			return new Request(`${decoded.scheme}://${decoded.authority}${decoded.path}`, {
+				method: decoded.method,
+				headers: decoded.headers,
+				body: bodyless ? null : decoded.body,
+				duplex: "half",
+			} as RequestInit & { duplex: "half" });
+		} catch (error) {
+			try {
+				await decoded.body.cancel(error);
+			} catch {}
+			throw error;
+		}
 	}
 
 	/** Decode a BHTTP byte stream into a Response whose body remains streaming. */
@@ -136,12 +143,19 @@ export class BHttpDecoder {
 		options: BHttpStreamDecoderOptions = {},
 	): Promise<Response> {
 		const decoded = await decodeStream(src, "response", options);
-		const bodyless = decoded.status === 204 || decoded.status === 304;
+		const bodyless = decoded.status === 204 || decoded.status === 205 || decoded.status === 304;
 		if (bodyless) await decoded.body.cancel();
-		return new Response(bodyless ? null : decoded.body, {
-			status: decoded.status,
-			headers: decoded.headers,
-		});
+		try {
+			return new Response(bodyless ? null : decoded.body, {
+				status: decoded.status,
+				headers: decoded.headers,
+			});
+		} catch (error) {
+			try {
+				await decoded.body.cancel(error);
+			} catch {}
+			throw error;
+		}
 	}
 
 	private decodeKnownLengthRequest(ctx: RequestDecoderContext): Request {
