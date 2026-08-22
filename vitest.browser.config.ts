@@ -1,9 +1,8 @@
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 
-// Runs the same test suite as vitest.config.ts, but inside a real browser
-// (headless Chromium via Playwright) to validate the library works against a
-// browser's native Fetch API / streams. The tests use no Node-only APIs.
+// Runs the same test suite as vitest.config.ts inside real browsers via
+// Playwright to validate the library against native Fetch APIs and streams.
 export default defineConfig({
 	test: {
 		include: ["test/**/*.test.ts"],
@@ -17,7 +16,7 @@ export default defineConfig({
 			enabled: true,
 			provider: playwright(),
 			headless: true,
-			instances: [{ browser: "chromium" }],
+			instances: [{ browser: "chromium" }, { browser: "firefox" }],
 		},
 	},
 });
