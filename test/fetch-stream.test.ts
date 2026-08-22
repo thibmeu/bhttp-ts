@@ -115,6 +115,32 @@ describe("Fetch streaming API", () => {
 		expect(source.stream.locked).toBe(false);
 	});
 
+	it("should decode a bodyless request when upstream cancellation fails", async () => {
+		// Arrange
+		const source = bodylessMessage(requestPreamble("GET"), new Error("cleanup failed"));
+
+		// Act
+		const request = await new BHttpDecoder().decodeRequestStream(source.stream);
+
+		// Assert
+		expect(request.method).toBe("GET");
+		expect(source.cancelled).toBe(true);
+		expect(source.stream.locked).toBe(false);
+	});
+
+	it("should decode a bodyless response when upstream cancellation fails", async () => {
+		// Arrange
+		const source = bodylessMessage(responsePreamble(205), new Error("cleanup failed"));
+
+		// Act
+		const response = await new BHttpDecoder().decodeResponseStream(source.stream);
+
+		// Assert
+		expect(response.status).toBe(205);
+		expect(source.cancelled).toBe(true);
+		expect(source.stream.locked).toBe(false);
+	});
+
 	it.each([
 		["CONNECT request", () => requestPreamble("CONNECT")],
 		["invalid response status", invalidResponsePreamble],
@@ -254,7 +280,7 @@ function invalidResponsePreamble(): Uint8Array {
 	return new Uint8Array([3, 0x42, 0xbc, 0]);
 }
 
-function bodylessMessage(preamble: Uint8Array) {
+function bodylessMessage(preamble: Uint8Array, cancelError?: Error) {
 	let pulls = 0;
 	let cancelled = false;
 	return {
@@ -264,6 +290,7 @@ function bodylessMessage(preamble: Uint8Array) {
 			},
 			cancel() {
 				cancelled = true;
+				if (cancelError !== undefined) throw cancelError;
 			},
 		}),
 		get cancelled() {

@@ -121,7 +121,7 @@ export class BHttpDecoder {
 		const decoded = await decodeStream(src, "request", options);
 		const bodyless =
 			decoded.method.toUpperCase() === "GET" || decoded.method.toUpperCase() === "HEAD";
-		if (bodyless) await decoded.body.cancel();
+		if (bodyless) await cancelQuietly(decoded.body);
 		try {
 			return new Request(`${decoded.scheme}://${decoded.authority}${decoded.path}`, {
 				method: decoded.method,
@@ -130,9 +130,7 @@ export class BHttpDecoder {
 				duplex: "half",
 			} as RequestInit & { duplex: "half" });
 		} catch (error) {
-			try {
-				await decoded.body.cancel(error);
-			} catch {}
+			await cancelQuietly(decoded.body, error);
 			throw error;
 		}
 	}
@@ -144,16 +142,14 @@ export class BHttpDecoder {
 	): Promise<Response> {
 		const decoded = await decodeStream(src, "response", options);
 		const bodyless = decoded.status === 204 || decoded.status === 205 || decoded.status === 304;
-		if (bodyless) await decoded.body.cancel();
+		if (bodyless) await cancelQuietly(decoded.body);
 		try {
 			return new Response(bodyless ? null : decoded.body, {
 				status: decoded.status,
 				headers: decoded.headers,
 			});
 		} catch (error) {
-			try {
-				await decoded.body.cancel(error);
-			} catch {}
+			await cancelQuietly(decoded.body, error);
 			throw error;
 		}
 	}
@@ -466,6 +462,12 @@ interface DecodedResponseStream {
 
 type RequestStreamPreamble = Omit<DecodedRequestStream, "body">;
 type ResponseStreamPreamble = Omit<DecodedResponseStream, "body">;
+
+async function cancelQuietly(body: ReadableStream<Uint8Array>, reason?: unknown): Promise<void> {
+	try {
+		await body.cancel(reason);
+	} catch {}
+}
 
 function decodeStream(
 	src: ReadableStream<Uint8Array>,
