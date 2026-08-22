@@ -9,7 +9,9 @@ export {
 	type BHttpRequestPreambleEvent,
 	type BHttpResponsePreambleEvent,
 	BHttpStreamDecoder,
+	type BHttpStreamDecoderOptions,
 	type BHttpTrailersEvent,
+	DEFAULT_MAX_METADATA_SIZE,
 } from "./stream-decoder";
 // Streaming API
 export {

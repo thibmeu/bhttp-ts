@@ -11,6 +11,82 @@ import {
 import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "../src/stream-encoder";
 
 describe("BHttpStreamDecoder", () => {
+	describe("maxMetadataSize", () => {
+		it("accepts metadata exactly at the configured limit", () => {
+			const preamble = new BHttpRequestStreamEncoder().encodePreamble(
+				"GET",
+				"https",
+				"example.com",
+				"/",
+				new Headers({ "x-test": "value" }),
+			);
+			const decoder = new BHttpStreamDecoder({ maxMetadataSize: preamble.length });
+
+			const events = decoder.push(preamble);
+			const end = decoder.end();
+
+			expect(events.some((event) => event.type === "request-preamble")).toBe(true);
+			expect(end.some((event) => event.type === "end")).toBe(true);
+		});
+
+		it("rejects a known-length field section before receiving its bytes", async () => {
+			const encoded = new Uint8Array(
+				await new BHttpEncoder().encodeResponse(
+					new Response(null, { headers: { "x-large": "v".repeat(1024) } }),
+				),
+			);
+			const decoder = new BHttpStreamDecoder({ maxMetadataSize: 32 });
+
+			let rejectedAt = encoded.length;
+			const decodeDeclaredLength = () => {
+				for (let i = 0; i < encoded.length; i++) {
+					try {
+						decoder.push(encoded.subarray(i, i + 1));
+					} catch (error) {
+						rejectedAt = i + 1;
+						throw error;
+					}
+				}
+			};
+
+			expect(decodeDeclaredLength).toThrow("metadata exceeds the configured limit");
+			expect(rejectedAt).toBeLessThan(encoded.length);
+		});
+
+		it("rejects indeterminate metadata accumulated across pushes", () => {
+			const preamble = new BHttpRequestStreamEncoder().encodePreamble(
+				"GET",
+				"https",
+				"example.com",
+				"/resource",
+				new Headers({ "x-test": "value" }),
+			);
+			const decoder = new BHttpStreamDecoder({ maxMetadataSize: preamble.length - 1 });
+
+			const pushByteByByte = () => {
+				for (const byte of preamble) decoder.push(new Uint8Array([byte]));
+			};
+
+			expect(pushByteByByte).toThrow("metadata exceeds the configured limit");
+		});
+
+		it("does not charge body content to the metadata limit", () => {
+			const encoder = new BHttpRequestStreamEncoder();
+			const preamble = encoder.encodePreamble("POST", "https", "example.com", "/", new Headers());
+			const content = encoder.encodeContentChunk(new Uint8Array(1024 * 1024));
+			const end = encoder.encodeEnd();
+			const decoder = new BHttpStreamDecoder({
+				maxMetadataSize: preamble.length + 1, // trailer terminator
+			});
+
+			decoder.push(preamble);
+			decoder.push(content);
+			const events = [...decoder.push(end), ...decoder.end()];
+
+			expect(events.some((event) => event.type === "end")).toBe(true);
+		});
+	});
+
 	describe("indeterminate-length request", () => {
 		it("decodes empty body request in one push", () => {
 			const encoder = new BHttpRequestStreamEncoder();
