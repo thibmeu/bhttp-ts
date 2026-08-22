@@ -104,17 +104,36 @@ for (const event of decoder.end()) {
 }
 ```
 
+When working with Fetch `Request` and `Response` objects, the high-level
+streaming methods preserve backpressure and cancellation automatically:
+
+```ts
+const encoder = new BHttpEncoder();
+const decoder = new BHttpDecoder();
+
+const encoded = encoder.encodeRequestStream(request);
+const decoded = await decoder.decodeRequestStream(encoded);
+```
+
+Response equivalents are `encodeResponseStream` and `decodeResponseStream`.
+The existing `BHttpRequestStreamEncoder`, `BHttpResponseStreamEncoder`, and
+`BHttpStreamDecoder` remain available when manual framing is required.
+
 ## API
 
 ### BHttpEncoder
 
 - `encodeRequest(request: Request): Promise<Uint8Array>` - Encode a Request to known-length BHTTP
 - `encodeResponse(response: Response): Promise<Uint8Array>` - Encode a Response to known-length BHTTP
+- `encodeRequestStream(request: Request): ReadableStream<Uint8Array>` - Encode a streaming Request to indeterminate-length BHTTP
+- `encodeResponseStream(response: Response): ReadableStream<Uint8Array>` - Encode a streaming Response to indeterminate-length BHTTP
 
 ### BHttpDecoder
 
 - `decodeRequest(data: ArrayBuffer | Uint8Array): Request` - Decode BHTTP to a Request
 - `decodeResponse(data: ArrayBuffer | Uint8Array): Response` - Decode BHTTP to a Response
+- `decodeRequestStream(stream: ReadableStream<Uint8Array>): Promise<Request>` - Decode a streaming BHTTP request
+- `decodeResponseStream(stream: ReadableStream<Uint8Array>): Promise<Response>` - Decode a streaming BHTTP response
 
 ### BHttpRequestStreamEncoder / BHttpResponseStreamEncoder
 
