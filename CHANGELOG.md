@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## Version 0.5.3
+
+Released 2026-08-22
+
+- Add bounded, backpressure-aware Fetch streams with reliable cleanup.
+
 ## Version 0.5.1
 
 Released 2026-08-19
