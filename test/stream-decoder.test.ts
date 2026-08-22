@@ -9,9 +9,26 @@ import {
 	BHttpStreamDecoder,
 } from "../src/stream-decoder";
 import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "../src/stream-encoder";
+import { encodeVli } from "../src/vli";
 
 describe("BHttpStreamDecoder", () => {
 	describe("maxMetadataSize", () => {
+		it("rejects an oversized request control string from its length prefix", () => {
+			const decoder = new BHttpStreamDecoder({ maxMetadataSize: 16 });
+			const prefix = new Uint8Array([2, ...encodeVli(1024)]);
+
+			expect(() => decoder.push(prefix)).toThrow("metadata exceeds the configured limit");
+		});
+
+		it("rejects an oversized indeterminate header from its length prefix", () => {
+			const decoder = new BHttpStreamDecoder({ maxMetadataSize: 16 });
+			// Indeterminate request framing, four empty control strings, then a
+			// declared header name without its payload.
+			const prefix = new Uint8Array([2, 0, 0, 0, 0, ...encodeVli(1024)]);
+
+			expect(() => decoder.push(prefix)).toThrow("metadata exceeds the configured limit");
+		});
+
 		it("accepts metadata exactly at the configured limit", () => {
 			const preamble = new BHttpRequestStreamEncoder().encodePreamble(
 				"GET",

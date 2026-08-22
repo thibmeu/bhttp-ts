@@ -769,13 +769,20 @@ export class BHttpStreamDecoder {
 
 		const strStart = this._vli.p;
 		const strEnd = strStart + strLen;
+		const encodedSize = strEnd - start;
+
+		// Validate the declaration without pending-charge state. The existing
+		// charge is committed only after the complete string is available.
+		if (chargeMetadata && this._metadataBytes + encodedSize > this._maxMetadataSize) {
+			throw new MetadataLimitExceededError("BHTTP metadata exceeds the configured limit");
+		}
 
 		if (this._buffer.length < strEnd) {
 			return undefined;
 		}
 
 		if (chargeMetadata) {
-			this._chargeMetadata(strEnd - start);
+			this._chargeMetadata(encodedSize);
 		}
 		const str = textDecoder.decode(this._buffer.subarray(strStart, strEnd));
 		this._offset = strEnd;
