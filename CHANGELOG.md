@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## Version 0.5.4
+
+Released 2026-08-26
+
 - Bound known-length encoding without an intermediate body copy.
 
 ## Version 0.5.3
