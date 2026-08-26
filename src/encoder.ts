@@ -12,14 +12,15 @@ class EncoderContext {
 	public p = 0;
 	public framingIndicator = 0;
 	public headerSize: number;
-	public body: Uint8Array;
+	public body: Uint8Array[];
+	public bodySize = 0;
 	// Header name/value pairs, pre-encoded to UTF-8 bytes.
 	public headerPairs: Array<[Uint8Array, Uint8Array]> = [];
 
 	constructor() {
 		this.buf = new Uint8Array(0);
 		this.headerSize = 0;
-		this.body = new Uint8Array(0);
+		this.body = [];
 	}
 
 	protected calculateVliSize(v: number): number {
@@ -48,6 +49,52 @@ class EncoderContext {
 			this.headerSize += this.fieldSize(k) + this.fieldSize(v);
 		});
 	}
+
+	protected async readBody(
+		body: ReadableStream<Uint8Array> | null | undefined,
+		arrayBuffer: () => Promise<ArrayBuffer>,
+		encodedSize: (bodySize: number) => number,
+		maxMessageSize: number,
+	) {
+		const emptySize = encodedSize(0);
+		if (emptySize > maxMessageSize) {
+			const error = messageLimitExceeded(emptySize, maxMessageSize);
+			try {
+				await body?.cancel(error);
+			} catch {}
+			throw error;
+		}
+		if (body == null) {
+			const value = new Uint8Array(await arrayBuffer());
+			this.body = value.byteLength === 0 ? [] : [value];
+			this.bodySize = value.byteLength;
+			const messageSize = encodedSize(this.bodySize);
+			if (messageSize > maxMessageSize) {
+				throw messageLimitExceeded(messageSize, maxMessageSize);
+			}
+			return;
+		}
+
+		const reader = body.getReader();
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) return;
+				this.bodySize += value.byteLength;
+				const messageSize = encodedSize(this.bodySize);
+				if (messageSize > maxMessageSize) {
+					const error = messageLimitExceeded(messageSize, maxMessageSize);
+					try {
+						await reader.cancel(error);
+					} catch {}
+					throw error;
+				}
+				if (value.byteLength > 0) this.body.push(value);
+			}
+		} finally {
+			reader.releaseLock();
+		}
+	}
 }
 
 class RequestEncoderContext extends EncoderContext {
@@ -64,20 +111,24 @@ class RequestEncoderContext extends EncoderContext {
 		this.url = new URL(request.url);
 	}
 
-	public async setup() {
-		// Load requestBody.
-		this.body = new Uint8Array(await this.request.arrayBuffer());
+	public async setup(maxMessageSize: number) {
 		// Pre-encode control data and headers to UTF-8.
 		this.method = te.encode(this.request.method);
 		this.scheme = te.encode(this.url.protocol.slice(0, this.url.protocol.length - 1));
 		this.authority = te.encode(this.url.host);
 		this.path = te.encode(this.url.pathname + this.url.search);
 		this.encodeHeaders(this.request.headers);
+		await this.readBody(
+			this.request.body,
+			() => this.request.arrayBuffer(),
+			(bodySize) => this.calculateEncodedRequestSize(bodySize),
+			maxMessageSize,
+		);
 		// Setup the output buffer.
-		this.buf = new Uint8Array(this.calculateEncodedRequestSize());
+		this.buf = new Uint8Array(this.calculateEncodedRequestSize(this.bodySize));
 	}
 
-	private calculateEncodedRequestSize(): number {
+	private calculateEncodedRequestSize(bodySize: number): number {
 		let len = 1; // framing indicator
 
 		// Request Control Data
@@ -91,8 +142,8 @@ class RequestEncoderContext extends EncoderContext {
 		len += this.headerSize;
 
 		// Known Length Content
-		len += this.calculateVliSize(this.body.byteLength);
-		len += this.body.byteLength;
+		len += this.calculateVliSize(bodySize);
+		len += bodySize;
 
 		// Known Length Trailers
 		len += 1; // The trailer size = 0;
@@ -110,16 +161,20 @@ class ResponseEncoderContext extends EncoderContext {
 		this.response = response;
 	}
 
-	public async setup() {
-		// Load responseBody.
-		this.body = new Uint8Array(await this.response.arrayBuffer());
+	public async setup(maxMessageSize: number) {
 		// Pre-encode headers to UTF-8.
 		this.encodeHeaders(this.response.headers);
+		await this.readBody(
+			this.response.body,
+			() => this.response.arrayBuffer(),
+			(bodySize) => this.calculateEncodedResponseSize(bodySize),
+			maxMessageSize,
+		);
 		// Setup the output buffer.
-		this.buf = new Uint8Array(this.calculateEncodedResponseSize());
+		this.buf = new Uint8Array(this.calculateEncodedResponseSize(this.bodySize));
 	}
 
-	private calculateEncodedResponseSize(): number {
+	private calculateEncodedResponseSize(bodySize: number): number {
 		let len = 1; // framing indicator
 
 		// Response Control Data
@@ -130,8 +185,8 @@ class ResponseEncoderContext extends EncoderContext {
 		len += this.headerSize;
 
 		// Known Length Content
-		len += this.calculateVliSize(this.body.byteLength);
-		len += this.body.byteLength;
+		len += this.calculateVliSize(bodySize);
+		len += bodySize;
 
 		// Known Length Trailers
 		len += 1; // The trailer size = 0;
@@ -142,19 +197,22 @@ class ResponseEncoderContext extends EncoderContext {
 }
 
 export class BHttpEncoder {
-	public async encodeRequest(src: Request): Promise<Uint8Array> {
+	public async encodeRequest(src: Request, options: BHttpEncoderOptions = {}): Promise<Uint8Array> {
 		// Setup RequestEncoderContext.
 		const ctx = new RequestEncoderContext(src);
-		await ctx.setup();
+		await ctx.setup(resolveMaxMessageSize(options.maxMessageSize));
 
 		// Do BHTTP encoding.
 		return this.encodeKnownLengthRequest(ctx);
 	}
 
-	public async encodeResponse(src: Response): Promise<Uint8Array> {
+	public async encodeResponse(
+		src: Response,
+		options: BHttpEncoderOptions = {},
+	): Promise<Uint8Array> {
 		// Setup ResponseEncoderContext.
 		const ctx = new ResponseEncoderContext(src);
-		await ctx.setup();
+		await ctx.setup(resolveMaxMessageSize(options.maxMessageSize));
 
 		// Do BHTTP encoding.
 		return this.encodeKnownLengthResponse(ctx);
@@ -254,9 +312,11 @@ export class BHttpEncoder {
 		}
 
 		// Known Length Content
-		this.encodeVli(ctx, ctx.body.byteLength);
-		ctx.buf.set(ctx.body, ctx.p);
-		ctx.p += ctx.body.byteLength;
+		this.encodeVli(ctx, ctx.bodySize);
+		for (const chunk of ctx.body) {
+			ctx.buf.set(chunk, ctx.p);
+			ctx.p += chunk.byteLength;
+		}
 
 		// Known Length Trailers
 		this.encodeVli(ctx, 0);
@@ -279,9 +339,11 @@ export class BHttpEncoder {
 		}
 
 		// Known Length Content
-		this.encodeVli(ctx, ctx.body.byteLength);
-		ctx.buf.set(ctx.body, ctx.p);
-		ctx.p += ctx.body.byteLength;
+		this.encodeVli(ctx, ctx.bodySize);
+		for (const chunk of ctx.body) {
+			ctx.buf.set(chunk, ctx.p);
+			ctx.p += chunk.byteLength;
+		}
 
 		// Known Length Trailers
 		this.encodeVli(ctx, 0);
@@ -306,4 +368,21 @@ export class BHttpEncoder {
 		}
 		writeTo(ctx, v);
 	}
+}
+
+export interface BHttpEncoderOptions {
+	readonly maxMessageSize?: number;
+}
+
+function resolveMaxMessageSize(value = Number.MAX_SAFE_INTEGER): number {
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new RangeError(`maxMessageSize must be a non-negative integer, got ${value}`);
+	}
+	return value;
+}
+
+function messageLimitExceeded(size: number, limit: number): errors.MessageLimitExceededError {
+	return new errors.MessageLimitExceededError(
+		`BHTTP message size ${size} exceeds maxMessageSize ${limit}`,
+	);
 }

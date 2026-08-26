@@ -1,5 +1,5 @@
 export { BHttpDecoder } from "./decoder";
-export { BHttpEncoder } from "./encoder";
+export { BHttpEncoder, type BHttpEncoderOptions } from "./encoder";
 export * from "./errors";
 export {
 	type BHttpContentEvent,

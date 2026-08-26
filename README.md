@@ -123,8 +123,8 @@ The existing `BHttpRequestStreamEncoder`, `BHttpResponseStreamEncoder`, and
 
 ### BHttpEncoder
 
-- `encodeRequest(request: Request): Promise<Uint8Array>` - Encode a Request to known-length BHTTP
-- `encodeResponse(response: Response): Promise<Uint8Array>` - Encode a Response to known-length BHTTP
+- `encodeRequest(request: Request, options?: { maxMessageSize?: number }): Promise<Uint8Array>` - Encode a Request to known-length BHTTP
+- `encodeResponse(response: Response, options?: { maxMessageSize?: number }): Promise<Uint8Array>` - Encode a Response to known-length BHTTP
 - `encodeRequestStream(request: Request): ReadableStream<Uint8Array>` - Encode a streaming Request to indeterminate-length BHTTP
 - `encodeResponseStream(response: Response): ReadableStream<Uint8Array>` - Encode a streaming Response to indeterminate-length BHTTP
 

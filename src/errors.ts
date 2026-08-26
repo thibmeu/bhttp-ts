@@ -11,6 +11,9 @@ export class InvalidMessageError extends BHttpError {}
 /** Message metadata exceeds the decoder's configured resource limit. */
 export class MetadataLimitExceededError extends BHttpError {}
 
+/** Encoded message exceeds the encoder's configured size limit. */
+export class MessageLimitExceededError extends BHttpError {}
+
 /**
  * Not supported data.
  */

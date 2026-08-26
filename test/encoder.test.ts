@@ -2,8 +2,68 @@ import { describe, expect, it } from "vitest";
 
 import { BHttpDecoder } from "../src/decoder";
 import { BHttpEncoder } from "../src/encoder";
+import { MessageLimitExceededError } from "../src/errors";
 
 describe("BHttpEncoder", () => {
+	it.each(["request", "response"] as const)(
+		"limits and cancels a known-length %s without joining body chunks",
+		async (kind) => {
+			const encoder = new BHttpEncoder();
+			const emptySize =
+				kind === "request"
+					? (await encoder.encodeRequest(new Request("https://example.com"))).byteLength
+					: (await encoder.encodeResponse(new Response())).byteLength;
+			let cancelled = false;
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new Uint8Array(8));
+					controller.enqueue(new Uint8Array(8));
+				},
+				cancel() {
+					cancelled = true;
+				},
+			});
+			const message =
+				kind === "request"
+					? {
+							url: "https://example.com",
+							method: "POST",
+							headers: new Headers(),
+							body,
+							arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+						}
+					: {
+							status: 200,
+							headers: new Headers(),
+							body,
+							arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+						};
+			const encode =
+				kind === "request"
+					? encoder.encodeRequest(message as Request, { maxMessageSize: emptySize + 8 })
+					: encoder.encodeResponse(message as Response, { maxMessageSize: emptySize + 8 });
+
+			await expect(encode).rejects.toBeInstanceOf(MessageLimitExceededError);
+			await expect(encode).rejects.toThrow(/BHTTP message size \d+ exceeds maxMessageSize \d+/);
+			expect(cancelled).toBe(true);
+		},
+	);
+
+	it("accepts a message at the exact encoded limit", async () => {
+		const encoder = new BHttpEncoder();
+		const bytes = await encoder.encodeResponse(new Response("body"));
+
+		await expect(
+			encoder.encodeResponse(new Response("body"), { maxMessageSize: bytes.byteLength }),
+		).resolves.toEqual(bytes);
+	});
+
+	it.each([-1, 1.5, Number.NaN])("rejects maxMessageSize %p", async (maxMessageSize) => {
+		await expect(
+			new BHttpEncoder().encodeResponse(new Response(), { maxMessageSize }),
+		).rejects.toBeInstanceOf(RangeError);
+	});
+
 	describe("POST", () => {
 		it("should encode a POST request with over 16383 byte length content.", async () => {
 			const req = new Request("https://www.example.com/hello.txt", {
