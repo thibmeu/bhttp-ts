@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Publish ESM only.
+
 ## Version 0.5.4
 
 Released 2026-08-26
