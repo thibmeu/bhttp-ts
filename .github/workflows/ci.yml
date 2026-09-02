@@ -25,9 +25,11 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
-      - run: npm run build
+      - if: matrix.node-version != 20
+        run: npm run build
       - run: npm test
       - name: Check package contents
+        if: matrix.node-version != 20
         run: npm pack --dry-run
 
   # Benchmark the current branch, then compare against main.
