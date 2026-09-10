@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { BHttpDecoder } from "../src/decoder";
-import { BHttpEncoder } from "../src/encoder";
+import { BHttpEncoder, type BHttpEncoderOptions } from "../src/encoder";
 import { MessageLimitExceededError } from "../src/errors";
+import { collectBytes } from "./utils";
 
 describe("BHttpEncoder", () => {
 	it.each(["request", "response"] as const)(
@@ -145,5 +146,67 @@ describe("BHttpEncoder", () => {
 			expect(decodedRes.headers.get("x-greeting")).toBe(headerValue);
 			expect(await decodedRes.text()).toBe(bodyText);
 		});
+	});
+});
+
+describe.each(["request", "response"] as const)("%s padding", (kind) => {
+	describe.each([false, true])("streaming: %s", (streaming) => {
+		const test = it.skipIf(
+			streaming &&
+				kind === "request" &&
+				!new Request("https://example.com", { method: "POST", body: "hello" }).body,
+		);
+		const encode = async (options?: BHttpEncoderOptions) => {
+			const encoder = new BHttpEncoder();
+			const message =
+				kind === "request"
+					? new Request("https://example.com/upload", { method: "POST", body: "hello" })
+					: new Response("hello");
+			const bytes =
+				kind === "request"
+					? streaming
+						? encoder.encodeRequestStream(message as Request, options)
+						: encoder.encodeRequest(message as Request, options)
+					: streaming
+						? encoder.encodeResponseStream(message as Response, options)
+						: encoder.encodeResponse(message as Response, options);
+			return bytes instanceof ReadableStream ? await collectBytes(bytes) : await bytes;
+		};
+
+		test("should leave padding disabled when only maxMessageSize is set", async () => {
+			const plain = await encode();
+			expect(await encode({ maxMessageSize: plain.length })).toEqual(plain);
+			expect(await encode({ padding: 0 })).toEqual(plain);
+		});
+
+		test.each([-1, 0, 1])("should pad around an exact boundary (%s)", async (offset) => {
+			const plain = await encode();
+			const padding = plain.length + offset;
+			const padded = await encode({ padding });
+			expect(padded.length).toBe(offset === -1 ? padding * 2 : padding);
+			expect(padded.subarray(0, plain.length)).toEqual(plain);
+			expect(padded.subarray(plain.length)).toEqual(new Uint8Array(padded.length - plain.length));
+			const decoder = new BHttpDecoder();
+			const decoded =
+				kind === "request" ? decoder.decodeRequest(padded) : decoder.decodeResponse(padded);
+			expect(await decoded.text()).toBe("hello");
+		});
+
+		test("should include padding in the message limit", async () => {
+			await expect(encode({ padding: 1024, maxMessageSize: 1024 })).resolves.toHaveLength(1024);
+			await expect(encode({ padding: 1024, maxMessageSize: 1023 })).rejects.toBeInstanceOf(
+				MessageLimitExceededError,
+			);
+			await expect(
+				encode({ padding: Number.MAX_SAFE_INTEGER, maxMessageSize: 1024 }),
+			).rejects.toBeInstanceOf(MessageLimitExceededError);
+		});
+
+		test.each([-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+			"should reject padding %s",
+			async (padding) => {
+				await expect(encode({ padding })).rejects.toBeInstanceOf(RangeError);
+			},
+		);
 	});
 });

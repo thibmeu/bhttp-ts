@@ -111,7 +111,7 @@ class RequestEncoderContext extends EncoderContext {
 		this.url = new URL(request.url);
 	}
 
-	public async setup(maxMessageSize: number) {
+	public async setup(maxMessageSize: number, padding: number) {
 		// Pre-encode control data and headers to UTF-8.
 		this.method = te.encode(this.request.method);
 		this.scheme = te.encode(this.url.protocol.slice(0, this.url.protocol.length - 1));
@@ -121,11 +121,11 @@ class RequestEncoderContext extends EncoderContext {
 		await this.readBody(
 			this.request.body,
 			() => this.request.arrayBuffer(),
-			(bodySize) => this.calculateEncodedRequestSize(bodySize),
+			(bodySize) => paddedSize(this.calculateEncodedRequestSize(bodySize), padding),
 			maxMessageSize,
 		);
 		// Setup the output buffer.
-		this.buf = new Uint8Array(this.calculateEncodedRequestSize(this.bodySize));
+		this.buf = new Uint8Array(paddedSize(this.calculateEncodedRequestSize(this.bodySize), padding));
 	}
 
 	private calculateEncodedRequestSize(bodySize: number): number {
@@ -161,17 +161,19 @@ class ResponseEncoderContext extends EncoderContext {
 		this.response = response;
 	}
 
-	public async setup(maxMessageSize: number) {
+	public async setup(maxMessageSize: number, padding: number) {
 		// Pre-encode headers to UTF-8.
 		this.encodeHeaders(this.response.headers);
 		await this.readBody(
 			this.response.body,
 			() => this.response.arrayBuffer(),
-			(bodySize) => this.calculateEncodedResponseSize(bodySize),
+			(bodySize) => paddedSize(this.calculateEncodedResponseSize(bodySize), padding),
 			maxMessageSize,
 		);
 		// Setup the output buffer.
-		this.buf = new Uint8Array(this.calculateEncodedResponseSize(this.bodySize));
+		this.buf = new Uint8Array(
+			paddedSize(this.calculateEncodedResponseSize(this.bodySize), padding),
+		);
 	}
 
 	private calculateEncodedResponseSize(bodySize: number): number {
@@ -200,7 +202,7 @@ export class BHttpEncoder {
 	public async encodeRequest(src: Request, options: BHttpEncoderOptions = {}): Promise<Uint8Array> {
 		// Setup RequestEncoderContext.
 		const ctx = new RequestEncoderContext(src);
-		await ctx.setup(resolveMaxMessageSize(options.maxMessageSize));
+		await ctx.setup(resolveMaxMessageSize(options.maxMessageSize), resolvePadding(options.padding));
 
 		// Do BHTTP encoding.
 		return this.encodeKnownLengthRequest(ctx);
@@ -212,14 +214,17 @@ export class BHttpEncoder {
 	): Promise<Uint8Array> {
 		// Setup ResponseEncoderContext.
 		const ctx = new ResponseEncoderContext(src);
-		await ctx.setup(resolveMaxMessageSize(options.maxMessageSize));
+		await ctx.setup(resolveMaxMessageSize(options.maxMessageSize), resolvePadding(options.padding));
 
 		// Do BHTTP encoding.
 		return this.encodeKnownLengthResponse(ctx);
 	}
 
 	/** Encode a Request as an indeterminate-length, backpressure-aware BHTTP stream. */
-	public encodeRequestStream(src: Request): ReadableStream<Uint8Array> {
+	public encodeRequestStream(
+		src: Request,
+		options: BHttpEncoderOptions = {},
+	): ReadableStream<Uint8Array> {
 		const url = new URL(src.url);
 		const encoder = new BHttpRequestStreamEncoder();
 		return this.encodeStream(
@@ -232,13 +237,22 @@ export class BHttpEncoder {
 			),
 			src.body,
 			encoder,
+			options,
 		);
 	}
 
 	/** Encode a Response as an indeterminate-length, backpressure-aware BHTTP stream. */
-	public encodeResponseStream(src: Response): ReadableStream<Uint8Array> {
+	public encodeResponseStream(
+		src: Response,
+		options: BHttpEncoderOptions = {},
+	): ReadableStream<Uint8Array> {
 		const encoder = new BHttpResponseStreamEncoder();
-		return this.encodeStream(encoder.encodePreamble(src.status, src.headers), src.body, encoder);
+		return this.encodeStream(
+			encoder.encodePreamble(src.status, src.headers),
+			src.body,
+			encoder,
+			options,
+		);
 	}
 
 	private encodeStream(
@@ -248,7 +262,17 @@ export class BHttpEncoder {
 			encodeContentChunkParts(chunk: Uint8Array): [Uint8Array, Uint8Array];
 			encodeEnd(): Uint8Array;
 		},
+		options: BHttpEncoderOptions,
 	): ReadableStream<Uint8Array> {
+		const padding = resolvePadding(options.padding);
+		const maxMessageSize = resolveMaxMessageSize(options.maxMessageSize);
+		let size = preamble.length;
+		let remaining = 0;
+		let ended = false;
+		const checkSize = () => {
+			const padded = paddedSize(size, padding);
+			if (padded > maxMessageSize) throw messageLimitExceeded(padded, maxMessageSize);
+		};
 		const reader = body?.getReader();
 		let released = false;
 		const release = () => {
@@ -257,37 +281,61 @@ export class BHttpEncoder {
 			reader.releaseLock();
 		};
 
+		const fail = async (error: unknown): Promise<never> => {
+			try {
+				if (!released) await reader?.cancel(error);
+			} catch {}
+			release();
+			throw error;
+		};
+
 		return new ReadableStream<Uint8Array>({
 			start(controller) {
-				controller.enqueue(preamble);
+				try {
+					checkSize();
+					controller.enqueue(preamble);
+				} catch (error) {
+					return fail(error);
+				}
 			},
 			async pull(controller) {
 				try {
+					if (ended) {
+						// Bound padding allocation and emit only on readable demand.
+						const length = Math.min(remaining, 16_384);
+						controller.enqueue(new Uint8Array(length));
+						remaining -= length;
+						if (remaining === 0) controller.close();
+						return;
+					}
 					if (reader !== undefined) {
 						const { done, value } = await reader.read();
 						if (!done) {
 							if (value.length > 0) {
 								const [prefix, data] = encoder.encodeContentChunkParts(value);
+								size += prefix.length + data.length;
+								checkSize();
 								controller.enqueue(prefix);
 								controller.enqueue(data);
 							}
 							return;
 						}
 					}
+					const end = encoder.encodeEnd();
+					size += end.length;
+					checkSize();
 					release();
-					controller.enqueue(encoder.encodeEnd());
-					controller.close();
+					controller.enqueue(end);
+					remaining = paddedSize(size, padding) - size;
+					ended = true;
+					if (remaining === 0) controller.close();
 				} catch (error) {
-					try {
-						await reader?.cancel(error);
-					} catch {}
-					release();
-					throw error;
+					return fail(error);
 				}
 			},
 			async cancel(reason) {
 				try {
-					await reader?.cancel(reason);
+					if (!released) await reader?.cancel(reason);
 				} finally {
 					release();
 				}
@@ -321,7 +369,7 @@ export class BHttpEncoder {
 		// Known Length Trailers
 		this.encodeVli(ctx, 0);
 
-		// No padding
+		// The remaining bytes are zero padding.
 		return ctx.buf;
 	}
 
@@ -348,7 +396,7 @@ export class BHttpEncoder {
 		// Known Length Trailers
 		this.encodeVli(ctx, 0);
 
-		// No padding
+		// The remaining bytes are zero padding.
 		return ctx.buf;
 	}
 
@@ -371,7 +419,10 @@ export class BHttpEncoder {
 }
 
 export interface BHttpEncoderOptions {
+	/** Maximum encoded bytes, including padding. */
 	readonly maxMessageSize?: number;
+	/** Pad the complete message to a multiple of this many bytes. 0 disables padding. @default 0 */
+	readonly padding?: number;
 }
 
 function resolveMaxMessageSize(value = Number.MAX_SAFE_INTEGER): number {
@@ -385,4 +436,15 @@ function messageLimitExceeded(size: number, limit: number): errors.MessageLimitE
 	return new errors.MessageLimitExceededError(
 		`BHTTP message size ${size} exceeds maxMessageSize ${limit}`,
 	);
+}
+
+function resolvePadding(value = 0): number {
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new RangeError(`padding must be a non-negative safe integer, got ${value}`);
+	}
+	return value;
+}
+
+function paddedSize(size: number, padding: number): number {
+	return padding === 0 ? size : size + ((padding - (size % padding)) % padding);
 }

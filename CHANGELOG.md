@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add `padding` to buffered and streaming Fetch encoders to pad complete messages
+  to a byte multiple. Padding defaults to `0` (disabled).
+- Streaming Fetch encoders now accept `maxMessageSize`; the limit includes padding.
 - Publish ESM only.
 
 ## Version 0.5.4
