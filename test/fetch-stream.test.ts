@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { BHttpDecoder } from "../src/decoder";
 import { BHttpEncoder } from "../src/encoder";
+import { MessageLimitExceededError } from "../src/errors";
 import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "../src/stream-encoder";
+
+import { collectBytes } from "./utils";
 
 const supportsStreamingRequestBodies = await hasStreamingRequestBodies();
 
@@ -298,3 +301,53 @@ function bodylessMessage(preamble: Uint8Array, cancelError?: Error) {
 		},
 	};
 }
+
+describe("streaming padding", () => {
+	it("should emit bounded padding and allow cancellation before allocating it all", async () => {
+		const stream = new BHttpEncoder().encodeResponseStream(new Response("hello"), {
+			padding: Number.MAX_SAFE_INTEGER,
+		});
+		const reader = stream.getReader();
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				expect(done).toBe(false);
+				if (done) throw new Error("Stream ended before padding");
+				expect(value.length).toBeLessThanOrEqual(16_384);
+				if (value.length === 16_384) {
+					expect(value).toEqual(new Uint8Array(16_384));
+					break;
+				}
+			}
+		} finally {
+			await reader.cancel();
+		}
+	});
+
+	it("should cancel the input when its padded size exceeds the limit", async () => {
+		let reason: unknown;
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				controller.enqueue(new Uint8Array(1024));
+			},
+			cancel(error) {
+				reason = error;
+			},
+		});
+		const encoded = new BHttpEncoder().encodeResponseStream(new Response(body), {
+			padding: 1024,
+			maxMessageSize: 1024,
+		});
+		await expect(collectBytes(encoded)).rejects.toBeInstanceOf(MessageLimitExceededError);
+		expect(reason).toBeInstanceOf(MessageLimitExceededError);
+		expect(body.locked).toBe(false);
+	});
+
+	it("should reject invalid padding before locking the body", () => {
+		const response = new Response(streamOf(new Uint8Array([1])));
+		expect(() => new BHttpEncoder().encodeResponseStream(response, { padding: -1 })).toThrow(
+			RangeError,
+		);
+		expect(response.body?.locked).toBe(false);
+	});
+});

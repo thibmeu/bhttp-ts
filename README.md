@@ -123,10 +123,29 @@ The existing `BHttpRequestStreamEncoder`, `BHttpResponseStreamEncoder`, and
 
 ### BHttpEncoder
 
-- `encodeRequest(request: Request, options?: { maxMessageSize?: number }): Promise<Uint8Array>` - Encode a Request to known-length BHTTP
-- `encodeResponse(response: Response, options?: { maxMessageSize?: number }): Promise<Uint8Array>` - Encode a Response to known-length BHTTP
-- `encodeRequestStream(request: Request): ReadableStream<Uint8Array>` - Encode a streaming Request to indeterminate-length BHTTP
-- `encodeResponseStream(response: Response): ReadableStream<Uint8Array>` - Encode a streaming Response to indeterminate-length BHTTP
+- `encodeRequest(request: Request, options?: BHttpEncoderOptions): Promise<Uint8Array>` - Encode a Request to known-length BHTTP
+- `encodeResponse(response: Response, options?: BHttpEncoderOptions): Promise<Uint8Array>` - Encode a Response to known-length BHTTP
+- `encodeRequestStream(request: Request, options?: BHttpEncoderOptions): ReadableStream<Uint8Array>` - Encode a streaming Request to indeterminate-length BHTTP
+- `encodeResponseStream(response: Response, options?: BHttpEncoderOptions): ReadableStream<Uint8Array>` - Encode a streaming Response to indeterminate-length BHTTP
+
+`BHttpEncoderOptions` accepts `padding` and `maxMessageSize`. Padding defaults to
+`0` (disabled), including when only `maxMessageSize` is set. A positive safe integer
+pads the complete encoded message to that byte multiple, using zero bytes after
+the trailers. For example, `padding: 1024` rounds a 1,100-byte message up to
+2,048 bytes. Already aligned messages receive no extra padding.
+
+```ts
+const bytes = await encoder.encodeRequest(request, { padding: 1024 });
+const stream = encoder.encodeResponseStream(response, { padding: 16384 });
+```
+
+`maxMessageSize` includes padding; exceeding it throws `MessageLimitExceededError`
+(or errors the stream). Streaming padding is emitted at EOF in bounded blocks,
+without buffering the whole message. Manual framing encoders remain unpadded.
+
+Buffered encoders allocate the full padded message. `maxMessageSize` defaults to
+`Number.MAX_SAFE_INTEGER`, so large padding values can cause large allocations.
+Set an explicit encoded-size limit, for example `{ padding: 1024, maxMessageSize: 1048576 }`.
 
 ### BHttpDecoder
 
