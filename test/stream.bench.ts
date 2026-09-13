@@ -107,3 +107,15 @@ describe("stream decode (256B slices)", () => {
 		});
 	}
 });
+
+// Repeated padding pushes must not retain and recopy earlier padding.
+describe("stream decode padding", () => {
+	const preamble = new Uint8Array([1, 0x40, 200, 0, 0, 0]);
+	const padding = new Uint8Array(4096);
+	bench("1MB in 4KB pushes", () => {
+		const decoder = new BHttpStreamDecoder();
+		decoder.push(preamble);
+		for (let i = 0; i < 256; i++) decoder.push(padding);
+		decoder.end();
+	});
+});

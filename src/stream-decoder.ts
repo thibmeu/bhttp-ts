@@ -20,8 +20,9 @@ const textDecoder = new TextDecoder();
 
 /** Append a field using the Cookie separator required by RFC 9292. */
 export function appendField(headers: Headers, name: string, value: string): void {
-	if (name.toLowerCase() === "cookie" && headers.has(name)) {
-		headers.set(name, `${headers.get(name)}; ${value}`);
+	if (name.length === 6 && name.toLowerCase() === "cookie" && headers.has(name)) {
+		const normalized = new Headers([[name, value]]).get(name) ?? "";
+		headers.set(name, `${headers.get(name)}; ${normalized}`);
 	} else {
 		headers.append(name, value);
 	}
@@ -231,13 +232,14 @@ export class BHttpStreamDecoder {
 		while (this._shouldContinueProcessing()) {
 			const event = this._processPhase();
 			if (event === undefined) {
-				break; // Need more data
+				return events; // Need more data
 			}
 			if (event !== null) {
 				events.push(event);
 			}
 		}
 
+		this._discardPadding();
 		return events;
 	}
 
@@ -271,17 +273,22 @@ export class BHttpStreamDecoder {
 
 		// Check padding
 		if (this._phase === "padding") {
-			while (this._offset < this._buffer.length) {
-				if (this._buffer[this._offset] !== 0x00) {
-					throw new InvalidMessageError("Invalid padding data");
-				}
-				this._offset++;
-			}
+			this._discardPadding();
 			this._phase = "done";
 			return [{ type: "end" }];
 		}
 
 		throw new InvalidMessageError("Incomplete message");
+	}
+
+	private _discardPadding(): void {
+		while (this._offset < this._buffer.length) {
+			if (this._buffer[this._offset++] !== 0) {
+				throw new InvalidMessageError("Invalid padding data");
+			}
+		}
+		this._buffer = EMPTY;
+		this._offset = 0;
 	}
 
 	/**
@@ -772,7 +779,7 @@ export class BHttpStreamDecoder {
 		if (
 			!chargeMetadata &&
 			(this._offset >= this._knownSectionEnd ||
-				1 << (this._buffer[this._offset] >> 6) > this._knownSectionEnd - this._offset)
+				1 << ((this._buffer[this._offset] ?? 0) >> 6) > this._knownSectionEnd - this._offset)
 		) {
 			throw new InvalidMessageError("Field exceeds section boundary");
 		}
