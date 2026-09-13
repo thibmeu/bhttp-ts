@@ -154,20 +154,16 @@ describe("BHttpDecoder/Encoder", () => {
 		});
 
 		it("treats an omitted content section (and trailers) as empty", async () => {
-			const encoder = new BHttpEncoder();
-			const headers = new Headers({ "content-type": "text/plain" });
-			const full = await encoder.encodeRequest(
-				new Request("https://www.example.com/", { method: "POST", headers, body: "Hello" }),
-			);
-			// Truncate everything after the header section: this drops the content
-			// length, the content bytes and the trailer length in one go.
-			const headerEnd = full.indexOf("Hello".charCodeAt(0));
-			const truncated = full.subarray(0, headerEnd);
+			// POST https://www.example.com/ with an empty header section.
+			const truncated = new Uint8Array([
+				0, 4, 80, 79, 83, 84, 5, 104, 116, 116, 112, 115, 15, 119, 119, 119, 46, 101, 120, 97, 109,
+				112, 108, 101, 46, 99, 111, 109, 1, 47, 0,
+			]);
 
 			const decoder = new BHttpDecoder();
 			const req = decoder.decodeRequest(truncated);
 			expect(req.method).toBe("POST");
-			expect(req.headers.get("content-type")?.startsWith("text/plain")).toBe(true);
+			expect(req.headers.has("content-type")).toBe(false);
 			expect(await req.text()).toBe("");
 		});
 	});

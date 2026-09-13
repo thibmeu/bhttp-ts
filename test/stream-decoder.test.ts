@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { BHttpDecoder } from "../src/decoder";
+import { InvalidMessageError } from "../src/errors";
 import { BHttpEncoder } from "../src/encoder";
 import {
 	type BHttpContentEvent,
@@ -493,5 +495,78 @@ describe("known-length messages split mid-headers", () => {
 		const preamble = events.find((e) => e.type === "response-preamble");
 		expect(preamble).toMatchObject({ status: 404 });
 		expect((preamble as BHttpResponsePreambleEvent).headers.get("x-k")).toBe("v");
+	});
+});
+
+describe("decoder length validation", () => {
+	const response = [1, 0x40, 200, 0];
+	const malformed = [
+		[...response, 5, 104, 105],
+		[...response, 0x40],
+		[...response, 0, 0x40],
+		[1, 0x40, 200, 3, 1, 120, 2, 97, 98],
+		[1, 0x40, 200, 1, 0x40, 1, 120, 0],
+		[1, 0x40, 200, 2, 1, 120],
+		[1, 0x40, 103, 3, 1, 120, 2, 97, 98, ...response.slice(1)],
+		[...response, 0, 3, 1, 120, 2, 97, 98],
+		[3, 0x40, 200, 0, 2, 104],
+		[3, 0x40, 200, 0, 2, 104, 105],
+		[3, 0x40, 200, 0, 0, 1, 120],
+		[3, 0x40, 200, 0, 0, 0x40],
+	];
+	it.each(malformed.map((bytes, i) => [i, new Uint8Array(bytes)] as const))(
+		"rejects malformed response %i at every split",
+		(_, bytes) => {
+			expect(() => new BHttpDecoder().decodeResponse(bytes)).toThrow(InvalidMessageError);
+			for (let split = 0; split <= bytes.length; split++) {
+				expect(() => {
+					const decoder = new BHttpStreamDecoder();
+					decoder.push(bytes.subarray(0, split));
+					decoder.push(bytes.subarray(split));
+					decoder.end();
+				}).toThrow(InvalidMessageError);
+			}
+		},
+	);
+
+	it.each([1, 3])("preserves valid trailing omissions for framing %i", (framing) => {
+		for (const tail of [[], [0], [0, 0]]) {
+			const bytes = new Uint8Array([framing, 0x40, 200, 0, ...tail]);
+			expect(new BHttpDecoder().decodeResponse(bytes).status).toBe(200);
+			const decoder = new BHttpStreamDecoder();
+			for (const byte of bytes) decoder.push(new Uint8Array([byte]));
+			expect(decoder.end()).toEqual([{ type: "end" }]);
+		}
+	});
+
+	it("decodes a field section with a two-byte length", async () => {
+		const bytes = await new BHttpEncoder().encodeResponse(
+			new Response("hi", { headers: { x: "a".repeat(70) } }),
+		);
+		for (let split = 0; split <= bytes.length; split++) {
+			const decoder = new BHttpStreamDecoder();
+			const events = [
+				...decoder.push(bytes.subarray(0, split)),
+				...decoder.push(bytes.subarray(split)),
+				...decoder.end(),
+			];
+			expect((events[0] as BHttpResponsePreambleEvent).headers.get("x")).toBe("a".repeat(70));
+			const body = events
+				.filter((e): e is BHttpContentEvent => e.type === "content")
+				.flatMap((e) => [...e.data]);
+			expect(new TextDecoder().decode(new Uint8Array(body))).toBe("hi");
+		}
+		const decoded = new BHttpDecoder().decodeResponse(bytes);
+		expect(decoded.headers.get("x")).toBe("a".repeat(70));
+		expect(await decoded.text()).toBe("hi");
+	});
+
+	it("accepts multi-byte name lengths in indeterminate fields", () => {
+		const bytes = new Uint8Array([3, 0x40, 200, 0x40, 1, 120, 1, 97, 0]);
+		expect(new BHttpDecoder().decodeResponse(bytes).headers.get("x")).toBe("a");
+		const decoder = new BHttpStreamDecoder();
+		const events = [...bytes].flatMap((byte) => decoder.push(new Uint8Array([byte])));
+		decoder.end();
+		expect((events[0] as BHttpResponsePreambleEvent).headers.get("x")).toBe("a");
 	});
 });

@@ -146,6 +146,7 @@ export class BHttpStreamDecoder {
 
 	// Bytes of the current indeterminate-length content chunk not yet emitted
 	private _contentRemaining = 0;
+	private _contentStarted = false;
 
 	// Accumulated headers/trailers
 	private _headers = new Headers();
@@ -250,12 +251,12 @@ export class BHttpStreamDecoder {
 		// still throws below, and so does a section that started reading its length
 		// but never delivered the bytes.
 		const atIndeterminateBoundary =
-			(this._phase === "content-indeterminate" && this._contentRemaining === 0) ||
+			(this._phase === "content-indeterminate" && !this._contentStarted) ||
 			this._phase === "trailers-indeterminate";
 		const atKnownBoundary =
 			(this._phase === "content-known" || this._phase === "trailers-known") &&
 			!this._knownSectionLenRead;
-		if (atIndeterminateBoundary || atKnownBoundary) {
+		if ((atIndeterminateBoundary || atKnownBoundary) && this._offset === this._buffer.length) {
 			this._phase = "padding";
 		}
 
@@ -640,6 +641,7 @@ export class BHttpStreamDecoder {
 				return null;
 			}
 
+			this._contentStarted = true;
 			this._contentRemaining = chunkLen;
 			this._offset = this._vli.p;
 		}
@@ -764,12 +766,22 @@ export class BHttpStreamDecoder {
 	 */
 	private _tryDecodeVliString(chargeMetadata = true): string | undefined {
 		const start = this._offset;
+		if (
+			!chargeMetadata &&
+			(this._offset >= this._knownSectionEnd ||
+				1 << (this._buffer[this._offset] >> 6) > this._knownSectionEnd - this._offset)
+		) {
+			throw new InvalidMessageError("Field exceeds section boundary");
+		}
 		const strLen = this._peekVli();
 		if (strLen === undefined) return undefined;
 
 		const strStart = this._vli.p;
 		const strEnd = strStart + strLen;
 		const encodedSize = strEnd - start;
+		if (!chargeMetadata && strLen > this._knownSectionEnd - strStart) {
+			throw new InvalidMessageError("Field exceeds section boundary");
+		}
 
 		// Validate the declaration without pending-charge state. The existing
 		// charge is committed only after the complete string is available.
