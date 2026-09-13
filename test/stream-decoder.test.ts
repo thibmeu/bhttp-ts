@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { BHttpDecoder } from "../src/decoder";
-import { InvalidMessageError } from "../src/errors";
 import { BHttpEncoder } from "../src/encoder";
+import { InvalidMessageError } from "../src/errors";
 import {
 	type BHttpContentEvent,
 	type BHttpEvent,
@@ -583,8 +583,8 @@ describe("repeated fields and bodyless responses", () => {
 			...field("set-cookie", "b=2"),
 			...field("x", "a"),
 			...field("x", "b"),
-			...field("cookie", "a=1"),
-			...field("cookie", "b=2"),
+			...field("cookie", " a=1 "),
+			...field("cookie", "\tb=2\t"),
 		];
 		const section = framing === 1 ? [...encodeVli(fields.length), ...fields] : [...fields, 0];
 		const bytes = new Uint8Array([
@@ -596,15 +596,22 @@ describe("repeated fields and bodyless responses", () => {
 			0,
 			...section,
 		]);
-		const check = (headers: Headers) => {
-			expect(headers.getSetCookie()).toEqual(["a=1", "b=2"]);
+		const check = (headers: Headers, cookies = ["a=1", "b=2"]) => {
+			expect(headers.getSetCookie()).toEqual(cookies);
 			expect(headers.get("x")).toBe("a, b");
 			expect(headers.get("cookie")).toBe("a=1; b=2");
 		};
 		const buffered = new BHttpDecoder().decodeResponse(bytes);
-		check(buffered.headers);
+		// Browser Response headers filter Set-Cookie; raw decoder events retain it.
+		const cookies = new Response(null, {
+			headers: [
+				["set-cookie", "a=1"],
+				["set-cookie", "b=2"],
+			],
+		}).headers.getSetCookie();
+		check(buffered.headers, cookies);
 		const roundTrip = await new BHttpEncoder().encodeResponse(buffered);
-		check(new BHttpDecoder().decodeResponse(roundTrip).headers);
+		check(new BHttpDecoder().decodeResponse(roundTrip).headers, cookies);
 		for (let split = 0; split <= bytes.length; split++) {
 			const decoder = new BHttpStreamDecoder();
 			const events = [
@@ -627,6 +634,63 @@ describe("repeated fields and bodyless responses", () => {
 			expect(response.status).toBe(status);
 			expect(response.body).toBeNull();
 			expect(await response.text()).toBe("");
+		}
+	});
+});
+
+describe("decoder padding", () => {
+	it.each([1, 3])("discards padding on every push for framing %i", (framing) => {
+		const decoder = new BHttpStreamDecoder();
+		decoder.push(new Uint8Array([framing, 0x40, 200, 0, 0, 0, 0, 0]));
+		// Inspect retained storage: successful decoding alone cannot catch accumulation.
+		const retained = () => (decoder as unknown as { _buffer: Uint8Array })._buffer.byteLength;
+		expect(retained()).toBe(0);
+		const padding = new Uint8Array(4096);
+		for (let i = 0; i < 256; i++) {
+			expect(decoder.push(padding)).toEqual([]);
+			expect(retained()).toBe(0);
+		}
+		expect(decoder.end()).toEqual([{ type: "end" }]);
+		expect(decoder.end()).toEqual([]);
+		expect(() => decoder.push(padding)).toThrow("Decoder already finished");
+	});
+	it.each([1, 3])("rejects nonzero padding during push for framing %i", (framing) => {
+		const bytes = new Uint8Array([framing, 0x40, 200, 0, 0, 0, 0, 1]);
+		for (let split = 0; split < bytes.length; split++) {
+			const decoder = new BHttpStreamDecoder();
+			decoder.push(bytes.subarray(0, split));
+			expect(() => decoder.push(bytes.subarray(split))).toThrow(InvalidMessageError);
+		}
+	});
+});
+
+describe("request length validation", () => {
+	const control = [...new TextEncoder().encode("\u0004POST\u0005https\u000bexample.com\u0001/")];
+	it.each([0, 2])("rejects truncated control data for framing %i", (framing) => {
+		for (let end = 1; end <= control.length; end++) {
+			const bytes = new Uint8Array([framing, ...control]).subarray(0, end);
+			expect(() => new BHttpDecoder().decodeRequest(bytes)).toThrow(InvalidMessageError);
+			const decoder = new BHttpStreamDecoder();
+			for (const byte of bytes) decoder.push(new Uint8Array([byte]));
+			expect(() => decoder.end()).toThrow(InvalidMessageError);
+		}
+	});
+	it.each([
+		[0, 3, 1, 120, 2, 97, 98],
+		[0, 0, 5, 104, 105],
+		[0, 0, 0, 3, 1, 120, 2, 97, 98],
+		[2, 0, 2, 104],
+		[2, 0, 2, 104, 105],
+	])("rejects malformed request %j", (framing, ...tail) => {
+		const bytes = new Uint8Array([framing, ...control, ...tail]);
+		expect(() => new BHttpDecoder().decodeRequest(bytes)).toThrow(InvalidMessageError);
+		for (let split = 0; split <= bytes.length; split++) {
+			expect(() => {
+				const decoder = new BHttpStreamDecoder();
+				decoder.push(bytes.subarray(0, split));
+				decoder.push(bytes.subarray(split));
+				decoder.end();
+			}).toThrow(InvalidMessageError);
 		}
 	});
 });

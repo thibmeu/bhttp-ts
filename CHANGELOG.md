@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject truncated fields and section overruns, preserve repeated headers, and
+  decode bodyless responses correctly. Discard streaming padding as it arrives.
 - Add `padding` to buffered and streaming Fetch encoders to pad complete messages
   to a byte multiple. Padding defaults to `0` (disabled).
 - Streaming Fetch encoders now accept `maxMessageSize`; the limit includes padding.

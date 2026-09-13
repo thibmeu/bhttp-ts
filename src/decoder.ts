@@ -2,6 +2,8 @@ import { tryReadFrom, MAX as VLI_MAX } from "quicvarint";
 import * as errors from "./errors";
 import { appendField, BHttpStreamDecoder, type BHttpStreamDecoderOptions } from "./stream-decoder";
 
+const EMPTY_CONTENT = new Uint8Array(0);
+
 class InformationalResponse {
 	public status: number;
 	public headers: Headers;
@@ -16,14 +18,14 @@ class DecoderContext {
 	public buf: Uint8Array;
 	public p = 0;
 	public framingIndicator = 0;
-	public headers: Headers;
+	public headers: [string, string][];
 	public content: Uint8Array;
 	public trailers: Headers;
 
 	constructor(buf: Uint8Array) {
 		this.buf = buf;
-		this.headers = new Headers();
-		this.content = new Uint8Array(0);
+		this.headers = [];
+		this.content = EMPTY_CONTENT;
 		this.trailers = new Headers();
 	}
 }
@@ -44,8 +46,11 @@ class RequestDecoderContext extends DecoderContext {
 				headers: this.headers,
 			});
 		} else {
-			// Create a new Uint8Array copy to ensure we have a clean ArrayBuffer
-			const bodyBuffer = new Uint8Array(this.content).buffer as ArrayBuffer;
+			// Reuse the empty buffer; copy content into an owned ArrayBuffer.
+			const bodyBuffer =
+				this.content.length === 0
+					? EMPTY_CONTENT.buffer
+					: (new Uint8Array(this.content).buffer as ArrayBuffer);
 			req = new Request(input, {
 				method: this.method,
 				headers: this.headers,
@@ -66,8 +71,11 @@ class ResponseDecoderContext extends DecoderContext {
 	}
 
 	public createResponse(): Response {
-		// Create a new Uint8Array copy to ensure we have a clean ArrayBuffer
-		const bodyBuffer = new Uint8Array(this.content).buffer as ArrayBuffer;
+		// Reuse the empty buffer; copy content into an owned ArrayBuffer.
+		const bodyBuffer =
+			this.content.length === 0
+				? EMPTY_CONTENT.buffer
+				: (new Uint8Array(this.content).buffer as ArrayBuffer);
 		const bodyless = this.status === 204 || this.status === 205 || this.status === 304;
 		return new Response(bodyless ? null : bodyBuffer, {
 			status: this.status,
@@ -235,11 +243,14 @@ export class BHttpDecoder {
 		if (len > ctx.buf.length - base) {
 			throw new errors.InvalidMessageError("Unexpected end of buffer");
 		}
+		const buf = ctx.buf;
+		ctx.buf = buf.subarray(0, end);
 		while (ctx.p < end) {
-			name = this.decodeVliAndValue(ctx, end);
-			value = this.decodeVliAndValue(ctx, end);
+			name = this.decodeVliAndValue(ctx);
+			value = this.decodeVliAndValue(ctx);
 			appendField(ir.headers, name, value);
 		}
+		ctx.buf = buf;
 		ctx.informationalResponses.push(ir);
 		return;
 	}
@@ -275,17 +286,20 @@ export class BHttpDecoder {
 		if (len > ctx.buf.length - base) {
 			throw new errors.InvalidMessageError("Unexpected end of buffer");
 		}
+		const buf = ctx.buf;
+		ctx.buf = buf.subarray(0, end);
 		while (ctx.p < end) {
-			name = this.decodeVliAndValue(ctx, end);
-			value = this.decodeVliAndValue(ctx, end);
+			name = this.decodeVliAndValue(ctx);
+			value = this.decodeVliAndValue(ctx);
 			if (
 				name.localeCompare("host", undefined, { sensitivity: "accent" }) === 0 &&
 				ctx.authority === ""
 			) {
 				ctx.authority = value;
 			}
-			appendField(ctx.headers, name, value);
+			this.appendHeader(ctx, name, value);
 		}
+		ctx.buf = buf;
 		return;
 	}
 
@@ -298,11 +312,14 @@ export class BHttpDecoder {
 		if (len > ctx.buf.length - base) {
 			throw new errors.InvalidMessageError("Unexpected end of buffer");
 		}
+		const buf = ctx.buf;
+		ctx.buf = buf.subarray(0, end);
 		while (ctx.p < end) {
-			name = this.decodeVliAndValue(ctx, end);
-			value = this.decodeVliAndValue(ctx, end);
-			appendField(ctx.headers, name, value);
+			name = this.decodeVliAndValue(ctx);
+			value = this.decodeVliAndValue(ctx);
+			this.appendHeader(ctx, name, value);
 		}
+		ctx.buf = buf;
 		return;
 	}
 
@@ -321,7 +338,7 @@ export class BHttpDecoder {
 			) {
 				ctx.authority = value;
 			}
-			appendField(ctx.headers, name, value);
+			this.appendHeader(ctx, name, value);
 			nameStart = ctx.p;
 			terminator = this.decodeVli(ctx);
 		}
@@ -337,7 +354,7 @@ export class BHttpDecoder {
 			ctx.p = nameStart;
 			name = this.decodeVliAndValue(ctx);
 			value = this.decodeVliAndValue(ctx);
-			appendField(ctx.headers, name, value);
+			this.appendHeader(ctx, name, value);
 			nameStart = ctx.p;
 			terminator = this.decodeVli(ctx);
 		}
@@ -402,11 +419,14 @@ export class BHttpDecoder {
 		if (len > ctx.buf.length - base) {
 			throw new errors.InvalidMessageError("Unexpected end of buffer");
 		}
+		const buf = ctx.buf;
+		ctx.buf = buf.subarray(0, end);
 		while (ctx.p < end) {
-			name = this.decodeVliAndValue(ctx, end);
-			value = this.decodeVliAndValue(ctx, end);
+			name = this.decodeVliAndValue(ctx);
+			value = this.decodeVliAndValue(ctx);
 			appendField(ctx.trailers, name, value);
 		}
+		ctx.buf = buf;
 		return;
 	}
 
@@ -448,22 +468,32 @@ export class BHttpDecoder {
 		return;
 	}
 
-	private decodeVliAndValue(ctx: DecoderContext, end = ctx.buf.length): string {
-		const len = this.decodeVli(ctx, end);
-		if (len > end - ctx.p) {
+	private appendHeader(ctx: DecoderContext, name: string, value: string): void {
+		// Fetch constructs Headers from these pairs, avoiding an intermediate copy.
+		if (name.length === 6 && name.toLowerCase() === "cookie") {
+			value = new Headers([[name, value]]).get(name) ?? "";
+			const cookie = ctx.headers.find(([key]) => key.toLowerCase() === "cookie");
+			if (cookie !== undefined) {
+				cookie[1] += `; ${value}`;
+				return;
+			}
+		}
+		ctx.headers.push([name, value]);
+	}
+
+	private decodeVliAndValue(ctx: DecoderContext): string {
+		const len = this.decodeVli(ctx);
+		const end = ctx.p + len;
+		if (end > ctx.buf.length) {
 			throw new errors.InvalidMessageError("Unexpected end of buffer");
 		}
-		// TextDecoder does not retain the input, so a view is safe and avoids a
-		// copy on every header/control/trailer field.
-		const res = this._td.decode(ctx.buf.subarray(ctx.p, ctx.p + len));
-		ctx.p += len;
+		// TextDecoder does not retain the input, so a view avoids a field copy.
+		const res = this._td.decode(ctx.buf.subarray(ctx.p, end));
+		ctx.p = end;
 		return res;
 	}
 
-	private decodeVli(ctx: DecoderContext, end = ctx.buf.length): number {
-		if (ctx.p >= end || 1 << (ctx.buf[ctx.p] >> 6) > end - ctx.p) {
-			throw new errors.InvalidMessageError("Unexpected end of buffer");
-		}
+	private decodeVli(ctx: DecoderContext): number {
 		// tryReadFrom separates the two failures: undefined for a VLI the buffer
 		// cuts short, throw for one whose value this package cannot represent.
 		let value: number | undefined;
