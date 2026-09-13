@@ -1,6 +1,6 @@
 import { tryReadFrom, MAX as VLI_MAX } from "quicvarint";
 import * as errors from "./errors";
-import { BHttpStreamDecoder, type BHttpStreamDecoderOptions } from "./stream-decoder";
+import { appendField, BHttpStreamDecoder, type BHttpStreamDecoderOptions } from "./stream-decoder";
 
 class InformationalResponse {
 	public status: number;
@@ -41,18 +41,17 @@ class RequestDecoderContext extends DecoderContext {
 		if (this.method === "GET" || this.method === "HEAD") {
 			req = new Request(input, {
 				method: this.method,
+				headers: this.headers,
 			});
 		} else {
 			// Create a new Uint8Array copy to ensure we have a clean ArrayBuffer
 			const bodyBuffer = new Uint8Array(this.content).buffer as ArrayBuffer;
 			req = new Request(input, {
 				method: this.method,
+				headers: this.headers,
 				body: bodyBuffer,
 			});
 		}
-		this.headers.forEach((value, key) => {
-			req.headers.set(key, value);
-		});
 		return req;
 	}
 }
@@ -69,7 +68,8 @@ class ResponseDecoderContext extends DecoderContext {
 	public createResponse(): Response {
 		// Create a new Uint8Array copy to ensure we have a clean ArrayBuffer
 		const bodyBuffer = new Uint8Array(this.content).buffer as ArrayBuffer;
-		return new Response(bodyBuffer, {
+		const bodyless = this.status === 204 || this.status === 205 || this.status === 304;
+		return new Response(bodyless ? null : bodyBuffer, {
 			status: this.status,
 			headers: this.headers,
 		});
@@ -238,7 +238,7 @@ export class BHttpDecoder {
 		while (ctx.p < end) {
 			name = this.decodeVliAndValue(ctx, end);
 			value = this.decodeVliAndValue(ctx, end);
-			ir.headers.set(name, value);
+			appendField(ir.headers, name, value);
 		}
 		ctx.informationalResponses.push(ir);
 		return;
@@ -258,7 +258,7 @@ export class BHttpDecoder {
 			ctx.p = nameStart;
 			name = this.decodeVliAndValue(ctx);
 			value = this.decodeVliAndValue(ctx);
-			ir.headers.set(name, value);
+			appendField(ir.headers, name, value);
 			nameStart = ctx.p;
 			terminator = this.decodeVli(ctx);
 		}
@@ -284,7 +284,7 @@ export class BHttpDecoder {
 			) {
 				ctx.authority = value;
 			}
-			ctx.headers.set(name, value);
+			appendField(ctx.headers, name, value);
 		}
 		return;
 	}
@@ -301,7 +301,7 @@ export class BHttpDecoder {
 		while (ctx.p < end) {
 			name = this.decodeVliAndValue(ctx, end);
 			value = this.decodeVliAndValue(ctx, end);
-			ctx.headers.set(name, value);
+			appendField(ctx.headers, name, value);
 		}
 		return;
 	}
@@ -321,7 +321,7 @@ export class BHttpDecoder {
 			) {
 				ctx.authority = value;
 			}
-			ctx.headers.set(name, value);
+			appendField(ctx.headers, name, value);
 			nameStart = ctx.p;
 			terminator = this.decodeVli(ctx);
 		}
@@ -337,7 +337,7 @@ export class BHttpDecoder {
 			ctx.p = nameStart;
 			name = this.decodeVliAndValue(ctx);
 			value = this.decodeVliAndValue(ctx);
-			ctx.headers.set(name, value);
+			appendField(ctx.headers, name, value);
 			nameStart = ctx.p;
 			terminator = this.decodeVli(ctx);
 		}
@@ -405,7 +405,7 @@ export class BHttpDecoder {
 		while (ctx.p < end) {
 			name = this.decodeVliAndValue(ctx, end);
 			value = this.decodeVliAndValue(ctx, end);
-			ctx.trailers.set(name, value);
+			appendField(ctx.trailers, name, value);
 		}
 		return;
 	}
@@ -422,7 +422,7 @@ export class BHttpDecoder {
 			ctx.p = nameStart;
 			name = this.decodeVliAndValue(ctx);
 			value = this.decodeVliAndValue(ctx);
-			ctx.trailers.set(name, value);
+			appendField(ctx.trailers, name, value);
 			nameStart = ctx.p;
 			terminator = this.decodeVli(ctx);
 		}
