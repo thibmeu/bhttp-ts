@@ -18,6 +18,15 @@ const FRAMING_RESPONSE_INDETERMINATE = 3;
 
 const textDecoder = new TextDecoder();
 
+/** Append a field using the Cookie separator required by RFC 9292. */
+export function appendField(headers: Headers, name: string, value: string): void {
+	if (name.toLowerCase() === "cookie" && headers.has(name)) {
+		headers.set(name, `${headers.get(name)}; ${value}`);
+	} else {
+		headers.append(name, value);
+	}
+}
+
 /** Default maximum encoded non-content bytes accepted in one message. */
 export const DEFAULT_MAX_METADATA_SIZE = 64 * 1024;
 
@@ -450,10 +459,7 @@ export class BHttpStreamDecoder {
 		| undefined {
 		const saveOffset = this._offset;
 		const saveMetadataBytes = this._metadataBytes;
-		const saveHeaders = new Headers();
-		this._headers.forEach((v, k) => {
-			saveHeaders.set(k, v);
-		});
+		const saveHeaders = new Headers(this._headers);
 
 		const complete = this._tryParseKnownLengthHeaders();
 		if (!complete) {
@@ -477,10 +483,7 @@ export class BHttpStreamDecoder {
 		| undefined {
 		const saveOffset = this._offset;
 		const saveMetadataBytes = this._metadataBytes;
-		const saveHeaders = new Headers();
-		this._headers.forEach((v, k) => {
-			saveHeaders.set(k, v);
-		});
+		const saveHeaders = new Headers(this._headers);
 		const savePendingName = this._pendingHeaderName;
 
 		const complete = this._tryParseIndeterminateLengthHeaders();
@@ -530,7 +533,7 @@ export class BHttpStreamDecoder {
 			) {
 				this._authority = value;
 			}
-			this._headers.set(name, value);
+			appendField(this._headers, name, value);
 		}
 
 		return true;
@@ -552,7 +555,7 @@ export class BHttpStreamDecoder {
 				) {
 					this._authority = value;
 				}
-				this._headers.set(this._pendingHeaderName, value);
+				appendField(this._headers, this._pendingHeaderName, value);
 				this._pendingHeaderName = null;
 				continue;
 			}
@@ -705,7 +708,7 @@ export class BHttpStreamDecoder {
 				this._knownSectionLenRead = false;
 				return undefined;
 			}
-			trailers.set(name, value);
+			appendField(trailers, name, value);
 		}
 
 		this._phase = "padding";
@@ -746,7 +749,7 @@ export class BHttpStreamDecoder {
 				this._metadataBytes = saveMetadataBytes;
 				return undefined;
 			}
-			trailers.set(name, value);
+			appendField(trailers, name, value);
 			hasTrailers = true;
 		}
 

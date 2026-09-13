@@ -570,3 +570,63 @@ describe("decoder length validation", () => {
 		expect((events[0] as BHttpResponsePreambleEvent).headers.get("x")).toBe("a");
 	});
 });
+
+describe("repeated fields and bodyless responses", () => {
+	const field = (name: string, value: string) => {
+		const n = new TextEncoder().encode(name);
+		const v = new TextEncoder().encode(value);
+		return [...encodeVli(n.length), ...n, ...encodeVli(v.length), ...v];
+	};
+	it.each([1, 3])("preserves repeated fields with framing %i at every split", async (framing) => {
+		const fields = [
+			...field("set-cookie", "a=1"),
+			...field("set-cookie", "b=2"),
+			...field("x", "a"),
+			...field("x", "b"),
+			...field("cookie", "a=1"),
+			...field("cookie", "b=2"),
+		];
+		const section = framing === 1 ? [...encodeVli(fields.length), ...fields] : [...fields, 0];
+		const bytes = new Uint8Array([
+			framing,
+			...encodeVli(103),
+			...section,
+			...encodeVli(200),
+			...section,
+			0,
+			...section,
+		]);
+		const check = (headers: Headers) => {
+			expect(headers.getSetCookie()).toEqual(["a=1", "b=2"]);
+			expect(headers.get("x")).toBe("a, b");
+			expect(headers.get("cookie")).toBe("a=1; b=2");
+		};
+		const buffered = new BHttpDecoder().decodeResponse(bytes);
+		check(buffered.headers);
+		const roundTrip = await new BHttpEncoder().encodeResponse(buffered);
+		check(new BHttpDecoder().decodeResponse(roundTrip).headers);
+		for (let split = 0; split <= bytes.length; split++) {
+			const decoder = new BHttpStreamDecoder();
+			const events = [
+				...decoder.push(bytes.subarray(0, split)),
+				...decoder.push(bytes.subarray(split)),
+				...decoder.end(),
+			];
+			const metadata = events.filter((e) => "headers" in e);
+			expect(metadata).toHaveLength(3);
+			for (const event of metadata) if ("headers" in event) check(event.headers);
+		}
+	});
+
+	it.each([204, 205, 304])("round trips status %i with no body", async (status) => {
+		const encoder = new BHttpEncoder();
+		const known = await encoder.encodeResponse(new Response(null, { status }));
+		const indeterminate = new Uint8Array([3, ...encodeVli(status), 0, 0, 0]);
+		for (const bytes of [known, indeterminate]) {
+			const response = new BHttpDecoder().decodeResponse(bytes);
+			expect(response.status).toBe(status);
+			expect(response.body).toBeNull();
+			expect(await response.text()).toBe("");
+		}
+	});
+});
