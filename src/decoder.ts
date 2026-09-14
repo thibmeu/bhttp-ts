@@ -210,7 +210,7 @@ export class BHttpDecoder {
 			this.decodeKnownLengthInformationalResponse(ctx, status);
 			status = this.decodeVli(ctx);
 		}
-		if (status < 100 && status >= 600) {
+		if (status < 200 || status >= 600) {
 			throw new errors.InvalidMessageError("Invalid status code.");
 		}
 		ctx.status = status;
@@ -224,7 +224,7 @@ export class BHttpDecoder {
 			this.decodeIndeterminateLengthInformationalResponse(ctx, status);
 			status = this.decodeVli(ctx);
 		}
-		if (status < 100 && status >= 600) {
+		if (status < 200 || status >= 600) {
 			throw new errors.InvalidMessageError("Invalid status code.");
 		}
 		ctx.status = status;
@@ -246,8 +246,8 @@ export class BHttpDecoder {
 		const buf = ctx.buf;
 		ctx.buf = buf.subarray(0, end);
 		while (ctx.p < end) {
-			name = this.decodeVliAndValue(ctx);
-			value = this.decodeVliAndValue(ctx);
+			name = this.decodeVliAndValue(ctx, true);
+			value = this.decodeVliAndValue(ctx, true);
 			appendField(ir.headers, name, value);
 		}
 		ctx.buf = buf;
@@ -267,8 +267,8 @@ export class BHttpDecoder {
 		let terminator = this.decodeVli(ctx);
 		while (terminator !== 0) {
 			ctx.p = nameStart;
-			name = this.decodeVliAndValue(ctx);
-			value = this.decodeVliAndValue(ctx);
+			name = this.decodeVliAndValue(ctx, true);
+			value = this.decodeVliAndValue(ctx, true);
 			appendField(ir.headers, name, value);
 			nameStart = ctx.p;
 			terminator = this.decodeVli(ctx);
@@ -289,8 +289,8 @@ export class BHttpDecoder {
 		const buf = ctx.buf;
 		ctx.buf = buf.subarray(0, end);
 		while (ctx.p < end) {
-			name = this.decodeVliAndValue(ctx);
-			value = this.decodeVliAndValue(ctx);
+			name = this.decodeVliAndValue(ctx, true);
+			value = this.decodeVliAndValue(ctx, true);
 			if (
 				name.localeCompare("host", undefined, { sensitivity: "accent" }) === 0 &&
 				ctx.authority === ""
@@ -315,8 +315,8 @@ export class BHttpDecoder {
 		const buf = ctx.buf;
 		ctx.buf = buf.subarray(0, end);
 		while (ctx.p < end) {
-			name = this.decodeVliAndValue(ctx);
-			value = this.decodeVliAndValue(ctx);
+			name = this.decodeVliAndValue(ctx, true);
+			value = this.decodeVliAndValue(ctx, true);
 			this.appendHeader(ctx, name, value);
 		}
 		ctx.buf = buf;
@@ -330,8 +330,8 @@ export class BHttpDecoder {
 		let terminator = this.decodeVli(ctx);
 		while (terminator !== 0) {
 			ctx.p = nameStart;
-			name = this.decodeVliAndValue(ctx);
-			value = this.decodeVliAndValue(ctx);
+			name = this.decodeVliAndValue(ctx, true);
+			value = this.decodeVliAndValue(ctx, true);
 			if (
 				name.localeCompare("host", undefined, { sensitivity: "accent" }) === 0 &&
 				ctx.authority === ""
@@ -352,8 +352,8 @@ export class BHttpDecoder {
 		let terminator = this.decodeVli(ctx);
 		while (terminator !== 0) {
 			ctx.p = nameStart;
-			name = this.decodeVliAndValue(ctx);
-			value = this.decodeVliAndValue(ctx);
+			name = this.decodeVliAndValue(ctx, true);
+			value = this.decodeVliAndValue(ctx, true);
 			this.appendHeader(ctx, name, value);
 			nameStart = ctx.p;
 			terminator = this.decodeVli(ctx);
@@ -422,8 +422,8 @@ export class BHttpDecoder {
 		const buf = ctx.buf;
 		ctx.buf = buf.subarray(0, end);
 		while (ctx.p < end) {
-			name = this.decodeVliAndValue(ctx);
-			value = this.decodeVliAndValue(ctx);
+			name = this.decodeVliAndValue(ctx, true);
+			value = this.decodeVliAndValue(ctx, true);
 			appendField(ctx.trailers, name, value);
 		}
 		ctx.buf = buf;
@@ -440,8 +440,8 @@ export class BHttpDecoder {
 		let terminator = this.decodeVli(ctx);
 		while (terminator !== 0) {
 			ctx.p = nameStart;
-			name = this.decodeVliAndValue(ctx);
-			value = this.decodeVliAndValue(ctx);
+			name = this.decodeVliAndValue(ctx, true);
+			value = this.decodeVliAndValue(ctx, true);
 			appendField(ctx.trailers, name, value);
 			nameStart = ctx.p;
 			terminator = this.decodeVli(ctx);
@@ -481,14 +481,20 @@ export class BHttpDecoder {
 		ctx.headers.push([name, value]);
 	}
 
-	private decodeVliAndValue(ctx: DecoderContext): string {
+	private decodeVliAndValue(ctx: DecoderContext, byteString = false): string {
 		const len = this.decodeVli(ctx);
 		const end = ctx.p + len;
 		if (end > ctx.buf.length) {
 			throw new errors.InvalidMessageError("Unexpected end of buffer");
 		}
-		// TextDecoder does not retain the input, so a view avoids a field copy.
-		const res = this._td.decode(ctx.buf.subarray(ctx.p, end));
+		// A view avoids a field copy.
+		const bytes = ctx.buf.subarray(ctx.p, end);
+		let res = "";
+		if (byteString) {
+			for (const byte of bytes) res += String.fromCharCode(byte);
+		} else {
+			res = this._td.decode(bytes);
+		}
 		ctx.p = end;
 		return res;
 	}

@@ -251,6 +251,11 @@ describe("BHttpResponseStreamEncoder", () => {
 		);
 	});
 
+	it("encodes header values as opaque octets", () => {
+		const bytes = new BHttpResponseStreamEncoder().encodePreamble(200, new Headers({ x: "é" }));
+		expect(bytes).toEqual(new Uint8Array([3, 0x40, 200, 1, 120, 1, 233, 0]));
+	});
+
 	it("throws on invalid informational status", () => {
 		const encoder = new BHttpResponseStreamEncoder();
 
