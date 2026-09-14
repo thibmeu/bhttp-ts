@@ -2,13 +2,13 @@ import { MAX as VLI_MAX, MIN as VLI_MIN, length as vliLength, writeTo } from "qu
 import * as errors from "./errors";
 import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "./stream-encoder";
 
-// Shared UTF-8 encoder. Strings are encoded to bytes once during setup() so
-// that lengths and offsets are computed in UTF-8 bytes (not UTF-16 code units),
-// which is what RFC 9292 requires for the VLI length prefixes.
+// Request control data uses UTF-8. Header fields use opaque ByteString octets.
 const te = new TextEncoder();
 
 function encodeByteString(value: string): Uint8Array {
-	return Uint8Array.from(value, (character) => character.charCodeAt(0));
+	const bytes = new Uint8Array(value.length);
+	for (let i = 0; i < value.length; i++) bytes[i] = value.charCodeAt(i);
+	return bytes;
 }
 
 class EncoderContext {
@@ -18,7 +18,7 @@ class EncoderContext {
 	public headerSize: number;
 	public body: Uint8Array[];
 	public bodySize = 0;
-	// Header name/value pairs, pre-encoded to UTF-8 bytes.
+	// Header name/value pairs, pre-encoded as opaque octets.
 	public headerPairs: Array<[Uint8Array, Uint8Array]> = [];
 
 	constructor() {

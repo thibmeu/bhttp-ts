@@ -154,21 +154,25 @@ export class BHttpStreamDecoder {
 
 	// Response status
 	private _status = 0;
+	// Non-null while an informational field section is incomplete.
 	private _informationalStatus: number | null = null;
 
-	// Known-length section tracking
+	// Final header and trailer retries roll back the section length and metadata charge together.
 	private _knownSectionLen = 0;
 	private _knownSectionEnd = 0;
 	private _knownSectionLenRead = false;
 
 	// Bytes of the current indeterminate-length content chunk not yet emitted
 	private _contentRemaining = 0;
+	// Distinguishes an omitted content section from a started one at end of input.
 	private _contentStarted = false;
 
 	// Accumulated headers/trailers
 	private _headers = new Headers();
+	// A consumed name stays pending until its value arrives; completed fields are never reparsed.
 	private _pendingHeaderName: string | null = null;
 	private readonly _maxMetadataSize: number;
+	// Counts committed encoded metadata bytes exactly once across pushes.
 	private _metadataBytes = 0;
 
 	constructor(options: BHttpStreamDecoderOptions = {}) {
