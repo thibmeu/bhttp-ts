@@ -1,6 +1,11 @@
 import { tryReadFrom, MAX as VLI_MAX } from "quicvarint";
 import * as errors from "./errors";
-import { appendField, BHttpStreamDecoder, type BHttpStreamDecoderOptions } from "./stream-decoder";
+import {
+	appendField,
+	BHttpStreamDecoder,
+	type BHttpStreamDecoderOptions,
+	decodeByteString,
+} from "./stream-decoder";
 
 const EMPTY_CONTENT = new Uint8Array(0);
 
@@ -478,7 +483,7 @@ export class BHttpDecoder {
 		const bytes = ctx.buf.subarray(ctx.p, end);
 		let res = "";
 		if (byteString) {
-			for (const byte of bytes) res += String.fromCharCode(byte);
+			res = decodeByteString(bytes);
 		} else {
 			res = this._td.decode(bytes);
 		}

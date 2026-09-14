@@ -14,6 +14,20 @@ import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "../src/st
 import { encodeVli } from "../src/vli";
 
 describe("BHttpStreamDecoder", () => {
+	it.each([8191, 8192, 8193, 131073])("preserves a %i-byte header value", async (length) => {
+		const value = "a\u0080\u00ff".repeat(Math.ceil(length / 3)).slice(0, length);
+		const bytes = await new BHttpEncoder().encodeResponse(
+			new Response(null, {
+				headers: { "x-long": value },
+			}),
+		);
+		expect(new BHttpDecoder().decodeResponse(bytes).headers.get("x-long")).toBe(value);
+		const decoder = new BHttpStreamDecoder({ maxMetadataSize: bytes.length });
+		const event = decoder.push(bytes).find((event) => event.type === "response-preamble");
+		expect(event?.headers.get("x-long")).toBe(value);
+		decoder.end();
+	});
+
 	describe("maxMetadataSize", () => {
 		it("rejects an oversized request control string from its length prefix", () => {
 			const decoder = new BHttpStreamDecoder({ maxMetadataSize: 16 });

@@ -18,9 +18,13 @@ const FRAMING_RESPONSE_INDETERMINATE = 3;
 
 const textDecoder = new TextDecoder();
 
-function decodeByteString(bytes: Uint8Array): string {
+export function decodeByteString(bytes: Uint8Array): string {
+	// Convert bytes in bounded calls to stay below engine argument limits.
+	if (bytes.length <= 8192) return Reflect.apply(String.fromCharCode, null, bytes);
 	let value = "";
-	for (const byte of bytes) value += String.fromCharCode(byte);
+	for (let offset = 0; offset < bytes.length; offset += 8192) {
+		value += Reflect.apply(String.fromCharCode, null, bytes.subarray(offset, offset + 8192));
+	}
 	return value;
 }
 
