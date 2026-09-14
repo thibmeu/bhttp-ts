@@ -1,6 +1,8 @@
 # Changes
 
-## Unreleased
+## Version 0.6.0
+
+Released 2026-09-15
 
 - Reject header characters above `0xFF` when the Fetch runtime accepts them,
   instead of silently truncating them during encoding.
