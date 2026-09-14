@@ -102,46 +102,50 @@ describe("Fetch streaming API", () => {
 		["204 response", () => responsePreamble(204)],
 		["205 response", () => responsePreamble(205)],
 		["304 response", () => responsePreamble(304)],
-	])("should cancel the input for a bodyless %s", async (_name, preamble) => {
-		// Arrange
-		const source = bodylessMessage(preamble());
-
-		// Act
-		if (_name.endsWith("request")) {
-			await new BHttpDecoder().decodeRequestStream(source.stream);
-		} else {
-			await new BHttpDecoder().decodeResponseStream(source.stream);
+	])("should validate the complete input for a bodyless %s", async (name, preamble) => {
+		const decode = (stream: ReadableStream<Uint8Array>) =>
+			name.endsWith("request")
+				? new BHttpDecoder().decodeRequestStream(stream)
+				: new BHttpDecoder().decodeResponseStream(stream);
+		for (const suffix of [[0, 0, 0], [], [0, 0, 255], [1], [0, 1, 120]]) {
+			const bytes = new Uint8Array([...preamble(), ...suffix]);
+			// Check every split, including the boundary immediately after headers.
+			for (let split = 0; split <= bytes.length; split++) {
+				let index = 0;
+				const chunks = [bytes.subarray(0, split), bytes.subarray(split)];
+				const stream = new ReadableStream<Uint8Array>({
+					pull(controller) {
+						if (index < chunks.length) controller.enqueue(chunks[index++]);
+						else controller.close();
+					},
+				});
+				if (suffix.length === 0 || suffix.every((byte) => byte === 0)) {
+					expect((await decode(stream)).body).toBeNull();
+				} else {
+					await expect(decode(stream)).rejects.toThrow();
+				}
+				expect(stream.locked).toBe(false);
+			}
 		}
-
-		// Assert
-		expect(source.cancelled).toBe(true);
-		expect(source.stream.locked).toBe(false);
 	});
 
-	it("should decode a bodyless request when upstream cancellation fails", async () => {
-		// Arrange
-		const source = bodylessMessage(requestPreamble("GET"), new Error("cleanup failed"));
-
-		// Act
-		const request = await new BHttpDecoder().decodeRequestStream(source.stream);
-
-		// Assert
-		expect(request.method).toBe("GET");
-		expect(source.cancelled).toBe(true);
-		expect(source.stream.locked).toBe(false);
-	});
-
-	it("should decode a bodyless response when upstream cancellation fails", async () => {
-		// Arrange
-		const source = bodylessMessage(responsePreamble(205), new Error("cleanup failed"));
-
-		// Act
-		const response = await new BHttpDecoder().decodeResponseStream(source.stream);
-
-		// Assert
-		expect(response.status).toBe(205);
-		expect(source.cancelled).toBe(true);
-		expect(source.stream.locked).toBe(false);
+	it("should preserve validation errors when upstream cancellation fails", async () => {
+		let pulls = 0;
+		let cancelled = false;
+		const stream = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				controller.enqueue(pulls++ === 0 ? responsePreamble(204) : Uint8Array.of(0, 0, 255));
+			},
+			cancel() {
+				cancelled = true;
+				throw new Error("cleanup failed");
+			},
+		});
+		await expect(new BHttpDecoder().decodeResponseStream(stream)).rejects.toThrow(
+			"Invalid padding data",
+		);
+		expect(cancelled).toBe(true);
+		expect(stream.locked).toBe(false);
 	});
 
 	it.each([

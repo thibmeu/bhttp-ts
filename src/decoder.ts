@@ -129,7 +129,7 @@ export class BHttpDecoder {
 		const decoded = await decodeStream(src, "request", options);
 		const bodyless =
 			decoded.method.toUpperCase() === "GET" || decoded.method.toUpperCase() === "HEAD";
-		if (bodyless) await cancelQuietly(decoded.body);
+		if (bodyless) await decoded.body.pipeTo(new WritableStream());
 		try {
 			return new Request(`${decoded.scheme}://${decoded.authority}${decoded.path}`, {
 				method: decoded.method,
@@ -150,7 +150,7 @@ export class BHttpDecoder {
 	): Promise<Response> {
 		const decoded = await decodeStream(src, "response", options);
 		const bodyless = decoded.status === 204 || decoded.status === 205 || decoded.status === 304;
-		if (bodyless) await cancelQuietly(decoded.body);
+		if (bodyless) await decoded.body.pipeTo(new WritableStream());
 		try {
 			return new Response(bodyless ? null : decoded.body, {
 				status: decoded.status,

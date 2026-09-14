@@ -6,6 +6,16 @@ import { MessageLimitExceededError } from "../src/errors";
 import { collectBytes } from "./utils";
 
 describe("BHttpEncoder", () => {
+	it("rejects error responses consistently in buffered and streaming encoding", async () => {
+		const encoder = new BHttpEncoder();
+		await expect(encoder.encodeResponse(Response.error())).rejects.toThrow(
+			"Final status must be 200-599",
+		);
+		expect(() => encoder.encodeResponseStream(Response.error())).toThrow(
+			"Final status must be 200-599",
+		);
+	});
+
 	it.each(["request", "response"] as const)(
 		"limits and cancels a known-length %s without joining body chunks",
 		async (kind) => {
