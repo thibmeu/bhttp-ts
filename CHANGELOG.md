@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Preserve header and trailer values as opaque HTTP bytes. Values containing
+  bytes `0x80`–`0xFF` are no longer converted to UTF-8 or rejected during decoding.
+- Retain completed indeterminate fields across streaming pushes, avoiding repeated
+  parsing of fragmented headers, informational responses, and trailers.
+- Reject final response statuses outside `200`–`599` with `InvalidMessageError`
+  before parsing headers in the buffered decoder.
 - Reject truncated fields and section overruns, preserve repeated headers, and
   decode bodyless responses correctly. Discard streaming padding as it arrives.
 - Add `padding` to buffered and streaming Fetch encoders to pad complete messages
@@ -20,6 +26,14 @@ Released 2026-08-26
 Released 2026-08-22
 
 - Add bounded, backpressure-aware Fetch streams with reliable cleanup.
+
+## Version 0.5.2
+
+Released 2026-08-22
+
+- Add `maxMetadataSize` to `BHttpStreamDecoder`, with a default limit of 64 KiB.
+  Reject metadata declarations that exceed the limit before buffering their
+  contents, using `MetadataLimitExceededError`. Content and padding are excluded.
 
 ## Version 0.5.1
 
@@ -98,6 +112,7 @@ Released 2026-06-06
   from UTF-8 byte lengths instead of `String.length`. Header values containing
   Latin-1 characters (U+0080–U+00FF) previously produced an undersized buffer
   and a corrupt encoding.
+  The Unreleased header-byte fix replaces this UTF-8 encoding with opaque bytes.
 - Improve streaming decoder performance: `push()` now drops already-consumed
   bytes before appending, avoiding O(n²) re-buffering when a message is fed in
   many small chunks.
