@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Wait for the complete message when decoding bodyless Fetch streams, so invalid
+  trailers and padding are always detected.
+- Reject responses with invalid status codes, including `Response.error()`, in
+  buffered encoding, as streaming encoding already does.
 - Preserve header and trailer values as opaque HTTP bytes. Values containing
   bytes `0x80`–`0xFF` are no longer converted to UTF-8 or rejected during decoding.
 - Encode header ByteStrings with indexed byte copies, avoiding callback overhead.
