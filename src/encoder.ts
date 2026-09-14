@@ -7,7 +7,11 @@ const te = new TextEncoder();
 
 function encodeByteString(value: string): Uint8Array {
 	const bytes = new Uint8Array(value.length);
-	for (let i = 0; i < value.length; i++) bytes[i] = value.charCodeAt(i);
+	for (let i = 0; i < value.length; i++) {
+		const code = value.charCodeAt(i);
+		if (code > 0xff) throw new TypeError("Header characters must fit in a single byte");
+		bytes[i] = code;
+	}
 	return bytes;
 }
 
