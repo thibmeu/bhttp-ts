@@ -216,6 +216,9 @@ export class BHttpEncoder {
 		src: Response,
 		options: BHttpEncoderOptions = {},
 	): Promise<Uint8Array> {
+		if (!Number.isInteger(src.status) || src.status < 200 || src.status >= 600) {
+			throw new Error("Final status must be 200-599");
+		}
 		// Setup ResponseEncoderContext.
 		const ctx = new ResponseEncoderContext(src);
 		await ctx.setup(resolveMaxMessageSize(options.maxMessageSize), resolvePadding(options.padding));

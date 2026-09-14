@@ -116,6 +116,9 @@ const decoded = await decoder.decodeRequestStream(encoded);
 ```
 
 Response equivalents are `encodeResponseStream` and `decodeResponseStream`.
+For GET/HEAD requests and 204/205/304 responses, decoding consumes and validates
+the complete input through EOF before resolving, while discarding content.
+Other messages finish validation when their decoded body is consumed to EOF.
 The existing `BHttpRequestStreamEncoder`, `BHttpResponseStreamEncoder`, and
 `BHttpStreamDecoder` remain available when manual framing is required.
 
