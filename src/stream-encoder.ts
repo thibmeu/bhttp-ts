@@ -15,11 +15,24 @@ const FRAMING_RESPONSE_INDETERMINATE = 3;
 
 const textEncoder = new TextEncoder();
 
+function encodeByteString(value: string): Uint8Array {
+	return Uint8Array.from(value, (character) => character.charCodeAt(0));
+}
+
 /**
  * Encode a string with VLI length prefix.
  */
 function encodeVliString(s: string): Uint8Array {
 	const bytes = textEncoder.encode(s);
+	const lenVli = encodeVli(bytes.length);
+	const result = new Uint8Array(lenVli.length + bytes.length);
+	result.set(lenVli);
+	result.set(bytes, lenVli.length);
+	return result;
+}
+
+function encodeVliByteString(s: string): Uint8Array {
+	const bytes = encodeByteString(s);
 	const lenVli = encodeVli(bytes.length);
 	const result = new Uint8Array(lenVli.length + bytes.length);
 	result.set(lenVli);
@@ -37,8 +50,8 @@ function encodeIndeterminateHeaders(headers: Headers): Uint8Array {
 	let totalLen = 0;
 
 	headers.forEach((value, name) => {
-		const nameBytes = encodeVliString(name);
-		const valueBytes = encodeVliString(value);
+		const nameBytes = encodeVliByteString(name);
+		const valueBytes = encodeVliByteString(value);
 		parts.push(nameBytes, valueBytes);
 		totalLen += nameBytes.length + valueBytes.length;
 	});

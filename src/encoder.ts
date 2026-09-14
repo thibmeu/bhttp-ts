@@ -7,6 +7,10 @@ import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "./stream-
 // which is what RFC 9292 requires for the VLI length prefixes.
 const te = new TextEncoder();
 
+function encodeByteString(value: string): Uint8Array {
+	return Uint8Array.from(value, (character) => character.charCodeAt(0));
+}
+
 class EncoderContext {
 	public buf: Uint8Array;
 	public p = 0;
@@ -38,13 +42,13 @@ class EncoderContext {
 		return this.calculateVliSize(bytes.length) + bytes.length;
 	}
 
-	// Encode the header pairs to UTF-8 and record headerSize (in bytes).
+	// Header field values are opaque octets represented by Fetch ByteStrings.
 	protected encodeHeaders(headers: Headers) {
 		this.headerPairs = [];
 		this.headerSize = 0;
 		headers.forEach((value, key) => {
-			const k = te.encode(key);
-			const v = te.encode(value);
+			const k = encodeByteString(key);
+			const v = encodeByteString(value);
 			this.headerPairs.push([k, v]);
 			this.headerSize += this.fieldSize(k) + this.fieldSize(v);
 		});
@@ -112,7 +116,7 @@ class RequestEncoderContext extends EncoderContext {
 	}
 
 	public async setup(maxMessageSize: number, padding: number) {
-		// Pre-encode control data and headers to UTF-8.
+		// Request control data is UTF-8; header fields are opaque octets.
 		this.method = te.encode(this.request.method);
 		this.scheme = te.encode(this.url.protocol.slice(0, this.url.protocol.length - 1));
 		this.authority = te.encode(this.url.host);
@@ -162,7 +166,7 @@ class ResponseEncoderContext extends EncoderContext {
 	}
 
 	public async setup(maxMessageSize: number, padding: number) {
-		// Pre-encode headers to UTF-8.
+		// Pre-encode header fields as opaque octets.
 		this.encodeHeaders(this.response.headers);
 		await this.readBody(
 			this.response.body,

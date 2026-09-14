@@ -18,6 +18,12 @@ const FRAMING_RESPONSE_INDETERMINATE = 3;
 
 const textDecoder = new TextDecoder();
 
+function decodeByteString(bytes: Uint8Array): string {
+	let value = "";
+	for (const byte of bytes) value += String.fromCharCode(byte);
+	return value;
+}
+
 /** Append a field using the Cookie separator required by RFC 9292. */
 export function appendField(headers: Headers, name: string, value: string): void {
 	if (name.length === 6 && name.toLowerCase() === "cookie" && headers.has(name)) {
@@ -148,6 +154,7 @@ export class BHttpStreamDecoder {
 
 	// Response status
 	private _status = 0;
+	private _informationalStatus: number | null = null;
 
 	// Known-length section tracking
 	private _knownSectionLen = 0;
@@ -263,7 +270,9 @@ export class BHttpStreamDecoder {
 		// but never delivered the bytes.
 		const atIndeterminateBoundary =
 			(this._phase === "content-indeterminate" && !this._contentStarted) ||
-			this._phase === "trailers-indeterminate";
+			(this._phase === "trailers-indeterminate" &&
+				this._pendingHeaderName === null &&
+				this._headers.keys().next().done);
 		const atKnownBoundary =
 			(this._phase === "content-known" || this._phase === "trailers-known") &&
 			!this._knownSectionLenRead;
@@ -410,17 +419,24 @@ export class BHttpStreamDecoder {
 	}
 
 	private _processResponseStatus(): BHttpInformationalEvent | null | undefined {
-		const saveOffset = this._offset;
-		const saveMetadataBytes = this._metadataBytes;
-
-		const status = this._peekVli();
-		if (status === undefined) return undefined;
-		this._offset = this._vli.p;
-		this._chargeMetadata(this._offset - saveOffset);
+		let status: number;
+		if (this._informationalStatus === null) {
+			const statusStart = this._offset;
+			const parsedStatus = this._peekVli();
+			if (parsedStatus === undefined) return undefined;
+			status = parsedStatus;
+			this._offset = this._vli.p;
+			this._chargeMetadata(this._offset - statusStart);
+		} else {
+			status = this._informationalStatus;
+		}
 
 		// Check for informational response (1xx)
 		if (status >= 100 && status < 200) {
-			this._headers = new Headers();
+			if (this._informationalStatus === null) {
+				this._informationalStatus = status;
+				this._headers = new Headers();
+			}
 
 			// Try to parse headers for informational response
 			const complete = this._isKnownLength
@@ -428,12 +444,6 @@ export class BHttpStreamDecoder {
 				: this._tryParseIndeterminateLengthHeaders();
 
 			if (!complete) {
-				// Rollback
-				this._offset = saveOffset;
-				this._headers = new Headers();
-				this._knownSectionLenRead = false;
-				this._pendingHeaderName = null;
-				this._metadataBytes = saveMetadataBytes;
 				return undefined;
 			}
 
@@ -444,11 +454,12 @@ export class BHttpStreamDecoder {
 			};
 			this._headers = new Headers();
 			this._knownSectionLenRead = false;
+			this._informationalStatus = null;
 			return event;
 		}
 
 		// Final status
-		if (status < 100 || status >= 600) {
+		if (status < 200 || status >= 600) {
 			throw new InvalidMessageError("Invalid status code");
 		}
 
@@ -488,17 +499,8 @@ export class BHttpStreamDecoder {
 		| BHttpResponsePreambleEvent
 		| null
 		| undefined {
-		const saveOffset = this._offset;
-		const saveMetadataBytes = this._metadataBytes;
-		const saveHeaders = new Headers(this._headers);
-		const savePendingName = this._pendingHeaderName;
-
 		const complete = this._tryParseIndeterminateLengthHeaders();
 		if (!complete) {
-			this._offset = saveOffset;
-			this._headers = saveHeaders;
-			this._pendingHeaderName = savePendingName;
-			this._metadataBytes = saveMetadataBytes;
 			return undefined;
 		}
 
@@ -528,9 +530,9 @@ export class BHttpStreamDecoder {
 
 		// Parse headers until we reach the end
 		while (this._offset < this._knownSectionEnd) {
-			const name = this._tryDecodeVliString(false);
+			const name = this._tryDecodeVliString(false, true);
 			if (name === undefined) return false;
-			const value = this._tryDecodeVliString(false);
+			const value = this._tryDecodeVliString(false, true);
 			if (value === undefined) return false;
 
 			if (
@@ -546,15 +548,16 @@ export class BHttpStreamDecoder {
 		return true;
 	}
 
-	private _tryParseIndeterminateLengthHeaders(): boolean {
+	private _tryParseIndeterminateLengthHeaders(setAuthority = true): boolean {
 		// Headers terminated by Name Length = 0
 		while (true) {
 			// If we have a pending header name, try to get value
 			if (this._pendingHeaderName !== null) {
-				const value = this._tryDecodeVliString();
+				const value = this._tryDecodeVliString(true, true);
 				if (value === undefined) return false;
 
 				if (
+					setAuthority &&
 					this._isRequest &&
 					this._pendingHeaderName.localeCompare("host", undefined, { sensitivity: "accent" }) ===
 						0 &&
@@ -579,7 +582,7 @@ export class BHttpStreamDecoder {
 			}
 
 			// Read the name
-			const name = this._tryDecodeVliString();
+			const name = this._tryDecodeVliString(true, true);
 			if (name === undefined) return false;
 
 			// Save name and try to get value on next iteration
@@ -648,6 +651,8 @@ export class BHttpStreamDecoder {
 				// Terminator - move to trailers
 				this._offset = this._vli.p;
 				this._phase = "trailers-indeterminate";
+				this._headers = new Headers();
+				this._pendingHeaderName = null;
 				return null;
 			}
 
@@ -703,13 +708,13 @@ export class BHttpStreamDecoder {
 		// Parse trailers
 		const trailers = new Headers();
 		while (this._offset < this._knownSectionEnd) {
-			const name = this._tryDecodeVliString(false);
+			const name = this._tryDecodeVliString(false, true);
 			if (name === undefined) {
 				this._offset = saveOffset;
 				this._knownSectionLenRead = false;
 				return undefined;
 			}
-			const value = this._tryDecodeVliString(false);
+			const value = this._tryDecodeVliString(false, true);
 			if (value === undefined) {
 				this._offset = saveOffset;
 				this._knownSectionLenRead = false;
@@ -724,57 +729,23 @@ export class BHttpStreamDecoder {
 	}
 
 	private _processTrailersIndeterminate(): BHttpTrailersEvent | null | undefined {
-		const saveOffset = this._offset;
-		const saveMetadataBytes = this._metadataBytes;
-		const trailers = new Headers();
-		let hasTrailers = false;
-
-		while (true) {
-			const nameLen = this._peekVli();
-			if (nameLen === undefined) {
-				this._offset = saveOffset;
-				this._metadataBytes = saveMetadataBytes;
-				return undefined;
-			}
-
-			if (nameLen === 0) {
-				// Terminator
-				this._chargeMetadata(this._vli.p - this._offset);
-				this._offset = this._vli.p;
-				break;
-			}
-
-			const name = this._tryDecodeVliString();
-			if (name === undefined) {
-				this._offset = saveOffset;
-				this._metadataBytes = saveMetadataBytes;
-				return undefined;
-			}
-			const value = this._tryDecodeVliString();
-			if (value === undefined) {
-				this._offset = saveOffset;
-				this._metadataBytes = saveMetadataBytes;
-				return undefined;
-			}
-			appendField(trailers, name, value);
-			hasTrailers = true;
-		}
+		if (!this._tryParseIndeterminateLengthHeaders(false)) return undefined;
 
 		this._phase = "padding";
 
 		// Only emit trailers event if there are any
-		if (!hasTrailers) {
+		if (this._headers.keys().next().done) {
 			return null;
 		}
 
-		return { type: "trailers", headers: trailers };
+		return { type: "trailers", headers: this._headers };
 	}
 
 	/**
 	 * Try to decode a VLI-prefixed string. Returns undefined if not enough data.
 	 * Does NOT rollback offset on failure - caller must handle.
 	 */
-	private _tryDecodeVliString(chargeMetadata = true): string | undefined {
+	private _tryDecodeVliString(chargeMetadata = true, byteString = false): string | undefined {
 		const start = this._offset;
 		if (
 			!chargeMetadata &&
@@ -806,7 +777,8 @@ export class BHttpStreamDecoder {
 		if (chargeMetadata) {
 			this._chargeMetadata(encodedSize);
 		}
-		const str = textDecoder.decode(this._buffer.subarray(strStart, strEnd));
+		const bytes = this._buffer.subarray(strStart, strEnd);
+		const str = byteString ? decodeByteString(bytes) : textDecoder.decode(bytes);
 		this._offset = strEnd;
 		return str;
 	}

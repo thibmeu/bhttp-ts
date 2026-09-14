@@ -104,6 +104,31 @@ describe("BHttpStreamDecoder", () => {
 
 			expect(events.some((event) => event.type === "end")).toBe(true);
 		});
+
+		it("counts fragmented informational, final, and trailer fields once", () => {
+			const encoder = new BHttpResponseStreamEncoder();
+			const preamble = encoder.encodePreamble(200, new Headers({ final: "b" }), [
+				{ status: 103, headers: new Headers({ info: "a" }) },
+			]);
+			const bytes = new Uint8Array([
+				...preamble,
+				...encoder.encodeEnd(new Headers({ trailer: "c" })),
+			]);
+			const metadataSize = bytes.length - 1; // content terminator
+			const decoder = new BHttpStreamDecoder({ maxMetadataSize: metadataSize });
+			const events = [...bytes].flatMap((byte) => decoder.push(new Uint8Array([byte])));
+			expect([...events, ...decoder.end()].map((event) => event.type)).toEqual([
+				"informational",
+				"response-preamble",
+				"trailers",
+				"end",
+			]);
+
+			const limited = new BHttpStreamDecoder({ maxMetadataSize: metadataSize - 1 });
+			expect(() => {
+				for (const byte of bytes) limited.push(new Uint8Array([byte]));
+			}).toThrow("metadata exceeds the configured limit");
+		});
 	});
 
 	describe("indeterminate-length request", () => {
@@ -193,6 +218,75 @@ describe("BHttpStreamDecoder", () => {
 	});
 
 	describe("indeterminate-length response", () => {
+		it("does not append completed fields again as the section grows", () => {
+			const headers = new Headers(
+				Array.from({ length: 16 }, (_, index) => [`x-${index}`, `${index}`]),
+			);
+			const encoder = new BHttpResponseStreamEncoder();
+			const bytes = new Uint8Array([
+				...encoder.encodePreamble(200, headers, [{ status: 103, headers }]),
+				...encoder.encodeEnd(headers),
+			]);
+			const append = Headers.prototype.append;
+			let calls = 0;
+			Headers.prototype.append = function (name, value) {
+				calls++;
+				return append.call(this, name, value);
+			};
+			try {
+				const decoder = new BHttpStreamDecoder();
+				const events = [...bytes].flatMap((byte) => decoder.push(new Uint8Array([byte])));
+				expect(events.filter((event) => "headers" in event)).toHaveLength(3);
+				decoder.end();
+				expect(calls).toBe(48);
+			} finally {
+				Headers.prototype.append = append;
+			}
+		});
+
+		it("preserves high octets in informational, final, and trailer fields", () => {
+			const high = Array.from({ length: 128 }, (_, index) =>
+				String.fromCharCode(index + 0x80),
+			).join("");
+			const encoder = new BHttpResponseStreamEncoder();
+			const preamble = encoder.encodePreamble(200, new Headers({ final: high }), [
+				{ status: 103, headers: new Headers({ info: high }) },
+			]);
+			const bytes = new Uint8Array([
+				...preamble,
+				...encoder.encodeEnd(new Headers({ trailer: high })),
+			]);
+			const decoder = new BHttpStreamDecoder();
+			const events = [...bytes].flatMap((byte) => decoder.push(new Uint8Array([byte])));
+			decoder.end();
+			expect(
+				events
+					.filter((event) => "headers" in event)
+					.map((event) => event.headers.values().next().value),
+			).toEqual([high, high, high]);
+		});
+
+		it.each([1, 3])("decodes raw high octets in every field section with framing %i", (framing) => {
+			const valueBytes = Array.from({ length: 128 }, (_, index) => index + 0x80);
+			const value = valueBytes.map((byte) => String.fromCharCode(byte)).join("");
+			const field = [1, 120, ...encodeVli(valueBytes.length), ...valueBytes];
+			const section = framing === 1 ? [...encodeVli(field.length), ...field] : [...field, 0];
+			const bytes = new Uint8Array([
+				framing,
+				...encodeVli(103),
+				...section,
+				...encodeVli(200),
+				...section,
+				0,
+				...section,
+			]);
+			const decoder = new BHttpStreamDecoder();
+			const events = [...bytes].flatMap((byte) => decoder.push(new Uint8Array([byte])));
+			decoder.end();
+			expect(
+				events.filter((event) => "headers" in event).map((event) => event.headers.get("x")),
+			).toEqual([value, value, value]);
+		});
 		it("decodes empty body response", () => {
 			const encoder = new BHttpResponseStreamEncoder();
 			const headers = new Headers({ "content-type": "application/json" });
@@ -512,6 +606,7 @@ describe("decoder length validation", () => {
 		[3, 0x40, 200, 0, 2, 104],
 		[3, 0x40, 200, 0, 2, 104, 105],
 		[3, 0x40, 200, 0, 0, 1, 120],
+		[3, 0x40, 200, 0, 0, 1, 120, 1, 97],
 		[3, 0x40, 200, 0, 0, 0x40],
 	];
 	it.each(malformed.map((bytes, i) => [i, new Uint8Array(bytes)] as const))(

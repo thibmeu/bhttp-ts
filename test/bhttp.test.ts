@@ -4,6 +4,55 @@ import { BHttpDecoder } from "../src/decoder";
 import { BHttpEncoder } from "../src/encoder";
 import { InvalidMessageError, NotSupportedError } from "../src/errors";
 import { BHttpStreamDecoder } from "../src/stream-decoder";
+import { encodeVli } from "../src/vli";
+
+describe("response status validation", () => {
+	it.each([1, 3])("rejects invalid final statuses before parsing framing %i headers", (framing) => {
+		for (const status of [0, 99, 600, 1_000_000]) {
+			const bytes = new Uint8Array([framing, ...encodeVli(status), 0xff]);
+			expect(() => new BHttpDecoder().decodeResponse(bytes)).toThrow(InvalidMessageError);
+			expect(() => new BHttpDecoder().decodeResponse(bytes)).toThrow("Invalid status code");
+		}
+	});
+
+	it.each([1, 3])("accepts final status boundaries with framing %i", (framing) => {
+		for (const status of [200, 599]) {
+			const bytes = new Uint8Array([framing, ...encodeVli(status), 0, 0, 0]);
+			expect(new BHttpDecoder().decodeResponse(bytes).status).toBe(status);
+		}
+	});
+
+	it.each([1, 3])(
+		"accepts informational status boundaries before the final response",
+		(framing) => {
+			const section = [0];
+			const bytes = new Uint8Array([
+				framing,
+				...encodeVli(100),
+				...section,
+				...encodeVli(199),
+				...section,
+				...encodeVli(200),
+				...section,
+				0,
+				0,
+			]);
+			expect(new BHttpDecoder().decodeResponse(bytes).status).toBe(200);
+		},
+	);
+});
+
+describe("opaque header octets", () => {
+	const valueBytes = Uint8Array.from({ length: 128 }, (_, index) => index + 0x80);
+	const value = Array.from(valueBytes, (byte) => String.fromCharCode(byte)).join("");
+	const field = [1, 120, ...encodeVli(valueBytes.length), ...valueBytes];
+
+	it.each([1, 3])("decodes every high octet with framing %i", (framing) => {
+		const section = framing === 1 ? [...encodeVli(field.length), ...field] : [...field, 0];
+		const bytes = new Uint8Array([framing, ...encodeVli(200), ...section, 0, 0]);
+		expect(new BHttpDecoder().decodeResponse(bytes).headers.get("x")).toBe(value);
+	});
+});
 
 describe("BHttpDecoder/Encoder", () => {
 	describe("GET", () => {
