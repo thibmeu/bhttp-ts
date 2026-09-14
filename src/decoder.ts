@@ -18,13 +18,13 @@ class DecoderContext {
 	public buf: Uint8Array;
 	public p = 0;
 	public framingIndicator = 0;
-	public headers: [string, string][];
+	public headers: Headers;
 	public content: Uint8Array;
 	public trailers: Headers;
 
 	constructor(buf: Uint8Array) {
 		this.buf = buf;
-		this.headers = [];
+		this.headers = new Headers();
 		this.content = EMPTY_CONTENT;
 		this.trailers = new Headers();
 	}
@@ -297,7 +297,7 @@ export class BHttpDecoder {
 			) {
 				ctx.authority = value;
 			}
-			this.appendHeader(ctx, name, value);
+			appendField(ctx.headers, name, value);
 		}
 		ctx.buf = buf;
 		return;
@@ -317,7 +317,7 @@ export class BHttpDecoder {
 		while (ctx.p < end) {
 			name = this.decodeVliAndValue(ctx, true);
 			value = this.decodeVliAndValue(ctx, true);
-			this.appendHeader(ctx, name, value);
+			appendField(ctx.headers, name, value);
 		}
 		ctx.buf = buf;
 		return;
@@ -338,7 +338,7 @@ export class BHttpDecoder {
 			) {
 				ctx.authority = value;
 			}
-			this.appendHeader(ctx, name, value);
+			appendField(ctx.headers, name, value);
 			nameStart = ctx.p;
 			terminator = this.decodeVli(ctx);
 		}
@@ -354,7 +354,7 @@ export class BHttpDecoder {
 			ctx.p = nameStart;
 			name = this.decodeVliAndValue(ctx, true);
 			value = this.decodeVliAndValue(ctx, true);
-			this.appendHeader(ctx, name, value);
+			appendField(ctx.headers, name, value);
 			nameStart = ctx.p;
 			terminator = this.decodeVli(ctx);
 		}
@@ -466,19 +466,6 @@ export class BHttpDecoder {
 			}
 		}
 		return;
-	}
-
-	private appendHeader(ctx: DecoderContext, name: string, value: string): void {
-		// Fetch constructs Headers from these pairs, avoiding an intermediate copy.
-		if (name.length === 6 && name.toLowerCase() === "cookie") {
-			value = new Headers([[name, value]]).get(name) ?? "";
-			const cookie = ctx.headers.find(([key]) => key.toLowerCase() === "cookie");
-			if (cookie !== undefined) {
-				cookie[1] += `; ${value}`;
-				return;
-			}
-		}
-		ctx.headers.push([name, value]);
 	}
 
 	private decodeVliAndValue(ctx: DecoderContext, byteString = false): string {

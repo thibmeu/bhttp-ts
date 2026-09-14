@@ -4,6 +4,7 @@
 
 - Preserve header and trailer values as opaque HTTP bytes. Values containing
   bytes `0x80`–`0xFF` are no longer converted to UTF-8 or rejected during decoding.
+- Encode header ByteStrings with indexed byte copies, avoiding callback overhead.
 - Retain completed indeterminate fields across streaming pushes, avoiding repeated
   parsing of fragmented headers, informational responses, and trailers.
 - Reject final response statuses outside `200`–`599` with `InvalidMessageError`

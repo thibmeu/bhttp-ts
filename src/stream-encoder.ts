@@ -16,7 +16,9 @@ const FRAMING_RESPONSE_INDETERMINATE = 3;
 const textEncoder = new TextEncoder();
 
 function encodeByteString(value: string): Uint8Array {
-	return Uint8Array.from(value, (character) => character.charCodeAt(0));
+	const bytes = new Uint8Array(value.length);
+	for (let i = 0; i < value.length; i++) bytes[i] = value.charCodeAt(i);
+	return bytes;
 }
 
 /**
