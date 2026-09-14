@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject header characters above `0xFF` when the Fetch runtime accepts them,
+  instead of silently truncating them during encoding.
+
 - Wait for the complete message when decoding bodyless Fetch streams, so invalid
   trailers and padding are always detected.
 - Reject responses with invalid status codes, including `Response.error()`, in

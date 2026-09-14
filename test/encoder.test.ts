@@ -152,6 +152,33 @@ describe("BHttpEncoder", () => {
 			expect(await decodedRes.text()).toBe(bodyText);
 		});
 
+		// Workers accepts Unicode headers that other Fetch runtimes reject.
+		const supportsUnicodeHeaders = (() => {
+			try {
+				new Headers({ x: "ā" });
+				return true;
+			} catch {
+				return false;
+			}
+		})();
+		describe.each([false, true])("streaming: %s", (streaming) => {
+			it.skipIf(!supportsUnicodeHeaders).each(["\u0100", "ā", "🌍"])(
+				"should reject non-ByteString header %s",
+				async (value) => {
+					// Arrange
+					const response = new Response(null, { headers: { x: value } });
+					const encoder = new BHttpEncoder();
+
+					// Act / Assert
+					if (streaming) {
+						expect(() => encoder.encodeResponseStream(response)).toThrow(TypeError);
+					} else {
+						await expect(encoder.encodeResponse(response)).rejects.toThrow(TypeError);
+					}
+				},
+			);
+		});
+
 		it("writes each header character as one wire octet", async () => {
 			const bytes = await new BHttpEncoder().encodeResponse(
 				new Response(null, { headers: { x: "é" } }),

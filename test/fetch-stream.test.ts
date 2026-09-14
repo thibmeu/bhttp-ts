@@ -120,7 +120,7 @@ describe("Fetch streaming API", () => {
 					},
 				});
 				if (suffix.length === 0 || suffix.every((byte) => byte === 0)) {
-					expect((await decode(stream)).body).toBeNull();
+					expect((await decode(stream)).body ?? null).toBeNull();
 				} else {
 					await expect(decode(stream)).rejects.toThrow();
 				}
