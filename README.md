@@ -142,6 +142,11 @@ const bytes = await encoder.encodeRequest(request, { padding: 1024 });
 const stream = encoder.encodeResponseStream(response, { padding: 16384 });
 ```
 
+A function policy receives the unpadded encoded size and returns the padded total,
+a safe integer at least as large as its input. It must never decrease as input grows,
+because streaming encoders check the limit as bytes arrive. Use `padmeWithFloor(1024)`
+for Padmé with a 1 KiB floor. `padme` implements [PURBs (Nikitin et al., 2019)](https://petsymposium.org/popets/2019/popets-2019-0056.php).
+
 `maxMessageSize` includes padding; exceeding it throws `MessageLimitExceededError`
 (or errors the stream). Streaming padding is emitted at EOF in bounded blocks,
 without buffering the whole message. Manual framing encoders remain unpadded.
