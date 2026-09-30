@@ -1,6 +1,8 @@
 # Changes
 
-## Unreleased
+## Version 0.6.1
+
+Released 2026-09-30
 
 ### Added
 
