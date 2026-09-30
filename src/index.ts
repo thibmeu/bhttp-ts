@@ -1,5 +1,11 @@
 export { BHttpDecoder } from "./decoder";
-export { BHttpEncoder, type BHttpEncoderOptions } from "./encoder";
+export {
+	BHttpEncoder,
+	type BHttpEncoderOptions,
+	type Padding,
+	padme,
+	padmeWithFloor,
+} from "./encoder";
 export * from "./errors";
 export {
 	type BHttpContentEvent,

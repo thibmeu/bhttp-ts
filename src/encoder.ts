@@ -64,9 +64,15 @@ class EncoderContext {
 		encodedSize: (bodySize: number) => number,
 		maxMessageSize: number,
 	) {
-		const emptySize = encodedSize(0);
-		if (emptySize > maxMessageSize) {
-			const error = messageLimitExceeded(emptySize, maxMessageSize);
+		const checkSize = () => {
+			const size = encodedSize(this.bodySize);
+			if (size > maxMessageSize) throw messageLimitExceeded(size, maxMessageSize);
+			return size;
+		};
+		let messageSize: number;
+		try {
+			messageSize = checkSize();
+		} catch (error) {
 			try {
 				await body?.cancel(error);
 			} catch {}
@@ -76,29 +82,25 @@ class EncoderContext {
 			const value = new Uint8Array(await arrayBuffer());
 			this.body = value.byteLength === 0 ? [] : [value];
 			this.bodySize = value.byteLength;
-			const messageSize = encodedSize(this.bodySize);
-			if (messageSize > maxMessageSize) {
-				throw messageLimitExceeded(messageSize, maxMessageSize);
-			}
-			return;
+			return this.bodySize === 0 ? messageSize : checkSize();
 		}
 
 		const reader = body.getReader();
 		try {
 			for (;;) {
 				const { done, value } = await reader.read();
-				if (done) return;
-				this.bodySize += value.byteLength;
-				const messageSize = encodedSize(this.bodySize);
-				if (messageSize > maxMessageSize) {
-					const error = messageLimitExceeded(messageSize, maxMessageSize);
-					try {
-						await reader.cancel(error);
-					} catch {}
-					throw error;
+				if (done) return messageSize;
+				if (value.byteLength > 0) {
+					this.bodySize += value.byteLength;
+					messageSize = checkSize();
+					this.body.push(value);
 				}
-				if (value.byteLength > 0) this.body.push(value);
 			}
+		} catch (error) {
+			try {
+				await reader.cancel(error);
+			} catch {}
+			throw error;
 		} finally {
 			reader.releaseLock();
 		}
@@ -119,21 +121,21 @@ class RequestEncoderContext extends EncoderContext {
 		this.url = new URL(request.url);
 	}
 
-	public async setup(maxMessageSize: number, padding: number) {
+	public async setup(maxMessageSize: number, padding: Padding) {
 		// Request control data is UTF-8; header fields are opaque octets.
 		this.method = te.encode(this.request.method);
 		this.scheme = te.encode(this.url.protocol.slice(0, this.url.protocol.length - 1));
 		this.authority = te.encode(this.url.host);
 		this.path = te.encode(this.url.pathname + this.url.search);
 		this.encodeHeaders(this.request.headers);
-		await this.readBody(
+		const size = await this.readBody(
 			this.request.body,
 			() => this.request.arrayBuffer(),
 			(bodySize) => paddedSize(this.calculateEncodedRequestSize(bodySize), padding),
 			maxMessageSize,
 		);
 		// Setup the output buffer.
-		this.buf = new Uint8Array(paddedSize(this.calculateEncodedRequestSize(this.bodySize), padding));
+		this.buf = new Uint8Array(size);
 	}
 
 	private calculateEncodedRequestSize(bodySize: number): number {
@@ -169,19 +171,17 @@ class ResponseEncoderContext extends EncoderContext {
 		this.response = response;
 	}
 
-	public async setup(maxMessageSize: number, padding: number) {
+	public async setup(maxMessageSize: number, padding: Padding) {
 		// Pre-encode header fields as opaque octets.
 		this.encodeHeaders(this.response.headers);
-		await this.readBody(
+		const size = await this.readBody(
 			this.response.body,
 			() => this.response.arrayBuffer(),
 			(bodySize) => paddedSize(this.calculateEncodedResponseSize(bodySize), padding),
 			maxMessageSize,
 		);
 		// Setup the output buffer.
-		this.buf = new Uint8Array(
-			paddedSize(this.calculateEncodedResponseSize(this.bodySize), padding),
-		);
+		this.buf = new Uint8Array(size);
 	}
 
 	private calculateEncodedResponseSize(bodySize: number): number {
@@ -283,6 +283,7 @@ export class BHttpEncoder {
 		const checkSize = () => {
 			const padded = paddedSize(size, padding);
 			if (padded > maxMessageSize) throw messageLimitExceeded(padded, maxMessageSize);
+			return padded;
 		};
 		const reader = body?.getReader();
 		let released = false;
@@ -334,10 +335,10 @@ export class BHttpEncoder {
 					}
 					const end = encoder.encodeEnd();
 					size += end.length;
-					checkSize();
+					const padded = checkSize();
 					release();
 					controller.enqueue(end);
-					remaining = paddedSize(size, padding) - size;
+					remaining = padded - size;
 					ended = true;
 					if (remaining === 0) controller.close();
 				} catch (error) {
@@ -429,11 +430,18 @@ export class BHttpEncoder {
 	}
 }
 
+export type Padding = number | ((size: number) => number);
+
 export interface BHttpEncoderOptions {
 	/** Maximum encoded bytes, including padding. */
 	readonly maxMessageSize?: number;
-	/** Pad the complete message to a multiple of this many bytes. 0 disables padding. @default 0 */
-	readonly padding?: number;
+	/**
+	 * A byte multiple (0 disables padding), or a function from unpadded size to padded total.
+	 * Functions must return a safe integer >= size and must never decrease as size grows:
+	 * streaming encoders check the padded size against maxMessageSize as bytes arrive.
+	 * @default 0
+	 */
+	readonly padding?: Padding;
 }
 
 function resolveMaxMessageSize(value = Number.MAX_SAFE_INTEGER): number {
@@ -449,13 +457,46 @@ function messageLimitExceeded(size: number, limit: number): errors.MessageLimitE
 	);
 }
 
-function resolvePadding(value = 0): number {
+function resolvePadding(value: Padding = 0) {
+	if (typeof value === "function") return value;
 	if (!Number.isSafeInteger(value) || value < 0) {
 		throw new RangeError(`padding must be a non-negative safe integer, got ${value}`);
 	}
 	return value;
 }
 
-function paddedSize(size: number, padding: number): number {
-	return padding === 0 ? size : size + ((padding - (size % padding)) % padding);
+function paddedSize(size: number, padding: Padding): number {
+	const padded =
+		typeof padding === "function"
+			? padding(size)
+			: padding === 0
+				? size
+				: size + ((padding - (size % padding)) % padding);
+	if (!Number.isSafeInteger(padded) || padded < size) {
+		throw new RangeError(`padding must return a safe integer >= ${size}, got ${padded}`);
+	}
+	return padded;
+}
+
+/** Padmé from Nikitin et al., PURBs (2019). Accepts non-negative safe integer sizes. */
+export function padme(size: number): number {
+	if (!Number.isSafeInteger(size) || size < 0)
+		throw new RangeError("size must be a non-negative safe integer");
+	if (size < 2) return size;
+	// Integer division avoids log2 rounding up just below powers of two.
+	let exponent = 0;
+	for (let n = size; n >= 2; n = Math.floor(n / 2)) exponent++;
+	const significant = Math.floor(Math.log2(exponent)) + 1;
+	const multiple = 2 ** (exponent - significant);
+	const padded = size + ((multiple - (size % multiple)) % multiple);
+	if (!Number.isSafeInteger(padded))
+		throw new RangeError("padded size exceeds the safe integer range");
+	return padded;
+}
+
+/** Create a nondecreasing Padmé policy with a minimum total size. */
+export function padmeWithFloor(min: number): (size: number) => number {
+	if (!Number.isSafeInteger(min) || min < 0)
+		throw new RangeError("min must be a non-negative safe integer");
+	return (size) => Math.max(min, padme(size));
 }

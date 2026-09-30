@@ -1,5 +1,17 @@
 # Changes
 
+## Unreleased
+
+### Added
+
+- Function padding policies for buffered and streaming encoders, plus `padme` and
+  `padmeWithFloor` helpers. Numeric padding keeps its existing behavior.
+
+### Fixed
+
+- Cancel buffered bodies when padding policies throw, and allocate from the checked
+  padded total without calling the policy again.
+
 ## Version 0.6.0
 
 Released 2026-09-15
