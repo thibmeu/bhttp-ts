@@ -1,4 +1,4 @@
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -12,5 +12,9 @@ export default defineConfig({
 	test: {
 		include: ["test/**/*.test.ts"],
 		testTimeout: 30_000,
+		// workerd can't read vitest 5's on-disk module cache
+		// (ENOENT readAll in node_modules/.vitest-cache); re-enable once
+		// @cloudflare/vitest-plugin supports it.
+		fsModuleCache: false,
 	},
 });
