@@ -1,15 +1,17 @@
 /**
  * Performance benchmarks for the streaming (indeterminate-length) BHTTP path.
  *
- * Run with `npm run bench` (→ `vitest bench`).
+ * Run with `npm run bench` (→ `vitest bench`). Results land in bench-results/;
+ * set BENCH_BASELINE=<dir> to compare against a previous run.
  *
  * The streaming path is the one that exercises quicvarint via src/vli.ts, plus
  * the many small Uint8Array allocations + concatenations in src/stream-encoder.ts
  * and the incremental buffering in src/stream-decoder.ts.
  */
 
-import { bench, describe } from "vitest";
+import { describe, test } from "vitest";
 import { BHttpRequestStreamEncoder, BHttpStreamDecoder } from "../src";
+import { runBench } from "./bench-utils";
 
 interface Shape {
 	name: string;
@@ -69,14 +71,16 @@ describe("stream encode request", () => {
 	for (const shape of shapes) {
 		const headers = makeHeaders(shape.headerCount);
 		const chunk = makeChunk(shape.chunkSize);
-		bench(shape.name, () => {
-			const enc = new BHttpRequestStreamEncoder();
-			enc.encodePreamble("POST", "https", "example.com", "/api", headers);
-			for (let i = 0; i < shape.chunkCount; i++) {
-				enc.encodeContentChunk(chunk);
-			}
-			enc.encodeEnd();
-		});
+		test(shape.name, ({ bench }) =>
+			runBench(bench, `stream encode request: ${shape.name}`, () => {
+				const enc = new BHttpRequestStreamEncoder();
+				enc.encodePreamble("POST", "https", "example.com", "/api", headers);
+				for (let i = 0; i < shape.chunkCount; i++) {
+					enc.encodeContentChunk(chunk);
+				}
+				enc.encodeEnd();
+			}),
+		);
 	}
 });
 
@@ -84,11 +88,13 @@ describe("stream encode request", () => {
 describe("stream decode (single push)", () => {
 	for (const shape of shapes) {
 		const bytes = streamEncode(shape);
-		bench(shape.name, () => {
-			const dec = new BHttpStreamDecoder();
-			dec.push(bytes);
-			dec.end();
-		});
+		test(shape.name, ({ bench }) =>
+			runBench(bench, `stream decode (single push): ${shape.name}`, () => {
+				const dec = new BHttpStreamDecoder();
+				dec.push(bytes);
+				dec.end();
+			}),
+		);
 	}
 });
 
@@ -98,13 +104,15 @@ describe("stream decode (256B slices)", () => {
 	for (const shape of shapes) {
 		const bytes = streamEncode(shape);
 		const step = 256;
-		bench(shape.name, () => {
-			const dec = new BHttpStreamDecoder();
-			for (let off = 0; off < bytes.length; off += step) {
-				dec.push(bytes.subarray(off, Math.min(off + step, bytes.length)));
-			}
-			dec.end();
-		});
+		test(shape.name, ({ bench }) =>
+			runBench(bench, `stream decode (256B slices): ${shape.name}`, () => {
+				const dec = new BHttpStreamDecoder();
+				for (let off = 0; off < bytes.length; off += step) {
+					dec.push(bytes.subarray(off, Math.min(off + step, bytes.length)));
+				}
+				dec.end();
+			}),
+		);
 	}
 });
 
@@ -112,10 +120,11 @@ describe("stream decode (256B slices)", () => {
 describe("stream decode padding", () => {
 	const preamble = new Uint8Array([1, 0x40, 200, 0, 0, 0]);
 	const padding = new Uint8Array(4096);
-	bench("1MB in 4KB pushes", () => {
-		const decoder = new BHttpStreamDecoder();
-		decoder.push(preamble);
-		for (let i = 0; i < 256; i++) decoder.push(padding);
-		decoder.end();
-	});
+	test("1MB in 4KB pushes", ({ bench }) =>
+		runBench(bench, "stream decode padding: 1MB in 4KB pushes", () => {
+			const decoder = new BHttpStreamDecoder();
+			decoder.push(preamble);
+			for (let i = 0; i < 256; i++) decoder.push(padding);
+			decoder.end();
+		}));
 });

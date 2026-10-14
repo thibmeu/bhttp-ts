@@ -44,15 +44,19 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Benchmark main branch (baseline)
+        run: |
+          git checkout main
+          npm ci
+          npm run bench
+          mv bench-results bench-baseline
+      - name: Checkout current branch
+        run: git checkout ${{ github.sha }}
       - run: npm ci
-      - name: Run benchmark for current branch
-        run: npm run bench -- --run --outputJson bench.json
-      - name: Checkout main branch
-        run: git checkout main
-      - name: Install dependencies (main branch)
-        run: npm ci
       - name: Compare benchmark against main
-        run: npm run bench -- --run --compare bench.json
+        run: npm run bench -- --reporter=verbose
+        env:
+          BENCH_BASELINE: bench-baseline
 
   # Run the library on the Bun runtime via the Node sample.
   bun:

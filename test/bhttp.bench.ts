@@ -1,7 +1,8 @@
 /**
  * Performance benchmarks for the core (known-length) BHTTP encode/decode paths.
  *
- * Run with `npm run bench` (→ `vitest bench`).
+ * Run with `npm run bench` (→ `vitest bench`). Results land in bench-results/;
+ * set BENCH_BASELINE=<dir> to compare against a previous run.
  *
  * Pattern reused from quicvarint's test/index.bench.ts: a shared workload table
  * + `describe` suites that `forEach` over it, with all input generation hoisted
@@ -16,8 +17,9 @@
  *     (src/encoder.ts:212)
  */
 
-import { bench, describe } from "vitest";
+import { describe, test } from "vitest";
 import { BHttpDecoder, BHttpEncoder } from "../src";
+import { runBench } from "./bench-utils";
 
 interface Shape {
 	name: string;
@@ -76,17 +78,21 @@ const decoder = new BHttpDecoder();
 // and matches the realistic "given app data, produce BHTTP bytes" path.
 describe("encode request", () => {
 	for (const shape of shapes) {
-		bench(shape.name, async () => {
-			await encoder.encodeRequest(buildRequest(shape));
-		});
+		test(shape.name, ({ bench }) =>
+			runBench(bench, `encode request: ${shape.name}`, async () => {
+				await encoder.encodeRequest(buildRequest(shape));
+			}),
+		);
 	}
 });
 
 describe("encode response", () => {
 	for (const shape of shapes) {
-		bench(shape.name, async () => {
-			await encoder.encodeResponse(buildResponse(shape));
-		});
+		test(shape.name, ({ bench }) =>
+			runBench(bench, `encode response: ${shape.name}`, async () => {
+				await encoder.encodeResponse(buildResponse(shape));
+			}),
+		);
 	}
 });
 
@@ -105,16 +111,20 @@ const responseBytes = await Promise.all(
 
 describe("decode request", () => {
 	for (const { shape, bytes } of requestBytes) {
-		bench(shape.name, () => {
-			decoder.decodeRequest(bytes);
-		});
+		test(shape.name, ({ bench }) =>
+			runBench(bench, `decode request: ${shape.name}`, () => {
+				decoder.decodeRequest(bytes);
+			}),
+		);
 	}
 });
 
 describe("decode response", () => {
 	for (const { shape, bytes } of responseBytes) {
-		bench(shape.name, () => {
-			decoder.decodeResponse(bytes);
-		});
+		test(shape.name, ({ bench }) =>
+			runBench(bench, `decode response: ${shape.name}`, () => {
+				decoder.decodeResponse(bytes);
+			}),
+		);
 	}
 });

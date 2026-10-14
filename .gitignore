@@ -13,7 +13,8 @@ coverage/
 *.lcov
 
 # Benchmark output
-bench.json
+bench-results/
+bench-baseline/
 
 # TypeScript
 *.tsbuildinfo
