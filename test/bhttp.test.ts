@@ -254,3 +254,23 @@ describe("VLI error classification", () => {
 		expect(() => new BHttpDecoder().decodeRequest(truncated)).toThrow("Unexpected end of buffer");
 	});
 });
+
+it("rejects control data that would change the URL host", () => {
+	const str = (s: string) => [...encodeVli(s.length), ...new TextEncoder().encode(s)];
+	for (const [authority, path] of [
+		["example.com", ".evil.example/x"],
+		["", "/evil.example"],
+	]) {
+		const bytes = new Uint8Array([
+			0,
+			...str("GET"),
+			...str("https"),
+			...str(authority),
+			...str(path),
+			0,
+			0,
+			0,
+		]);
+		expect(() => new BHttpDecoder().decodeRequest(bytes)).toThrow(InvalidMessageError);
+	}
+});

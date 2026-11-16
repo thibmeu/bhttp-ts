@@ -9,6 +9,20 @@ import {
 
 const EMPTY_CONTENT = new Uint8Array(0);
 
+// Stop fields bleeding into the host, e.g. "example.com" + ".evil.example/x".
+function requestUrl(scheme: string, authority: string, path: string): string {
+	if (!/^[a-z][a-z0-9+.-]*$/i.test(scheme)) {
+		throw new errors.InvalidMessageError("Invalid scheme");
+	}
+	if (authority === "" || /[/\\?#@\s]/.test(authority)) {
+		throw new errors.InvalidMessageError("Invalid authority");
+	}
+	if (!path.startsWith("/")) {
+		throw new errors.InvalidMessageError("Invalid path");
+	}
+	return `${scheme}://${authority}${path}`;
+}
+
 class InformationalResponse {
 	public status: number;
 	public headers: Headers;
@@ -42,7 +56,7 @@ class RequestDecoderContext extends DecoderContext {
 	public path = "";
 
 	public createRequest(): Request {
-		const input = `${this.scheme}://${this.authority}${this.path}`;
+		const input = requestUrl(this.scheme, this.authority, this.path);
 		let req: Request;
 
 		if (this.method === "GET" || this.method === "HEAD") {
@@ -136,7 +150,7 @@ export class BHttpDecoder {
 			decoded.method.toUpperCase() === "GET" || decoded.method.toUpperCase() === "HEAD";
 		if (bodyless) await decoded.body.pipeTo(new WritableStream());
 		try {
-			return new Request(`${decoded.scheme}://${decoded.authority}${decoded.path}`, {
+			return new Request(requestUrl(decoded.scheme, decoded.authority, decoded.path), {
 				method: decoded.method,
 				headers: decoded.headers,
 				body: bodyless ? null : decoded.body,
