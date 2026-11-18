@@ -35,6 +35,20 @@ describe("BHttpStreamDecoder", () => {
 	});
 
 	describe("maxMetadataSize", () => {
+		it("stream decoding keeps the constructor limit when options omit it", async () => {
+			const bytes = await new BHttpEncoder().encodeResponse(
+				new Response(null, { headers: { x: "y".repeat(200) } }),
+			);
+			const decoder = new BHttpDecoder({ maxMetadataSize: 100 });
+			const stream = () => new Blob([bytes]).stream();
+			await expect(decoder.decodeResponseStream(stream(), {})).rejects.toThrow(
+				MetadataLimitExceededError,
+			);
+			await expect(
+				decoder.decodeResponseStream(stream(), { maxMetadataSize: 1024 }),
+			).resolves.toBeInstanceOf(Response);
+		});
+
 		it("rejects an oversized request control string from its length prefix", () => {
 			const decoder = new BHttpStreamDecoder({ maxMetadataSize: 16 });
 			const prefix = new Uint8Array([2, ...encodeVli(1024)]);

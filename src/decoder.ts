@@ -125,9 +125,9 @@ export class BHttpDecoder {
 	/** Decode a BHTTP byte stream into a Request whose body remains streaming. */
 	public async decodeRequestStream(
 		src: ReadableStream<Uint8Array>,
-		options: BHttpStreamDecoderOptions = { maxMetadataSize: this._maxMetadataSize },
+		options: BHttpStreamDecoderOptions = {},
 	): Promise<Request> {
-		const decoded = await decodeStream(src, "request", options);
+		const decoded = await decodeStream(src, "request", this.streamOptions(options));
 		const bodyless = isBodylessRequest(decoded.method);
 		try {
 			const request = createRequest(decoded, bodyless ? null : decoded.body);
@@ -151,9 +151,9 @@ export class BHttpDecoder {
 	/** Decode a BHTTP byte stream into a Response whose body remains streaming. */
 	public async decodeResponseStream(
 		src: ReadableStream<Uint8Array>,
-		options: BHttpStreamDecoderOptions = { maxMetadataSize: this._maxMetadataSize },
+		options: BHttpStreamDecoderOptions = {},
 	): Promise<Response> {
-		const decoded = await decodeStream(src, "response", options);
+		const decoded = await decodeStream(src, "response", this.streamOptions(options));
 		const bodyless = decoded.status === 204 || decoded.status === 205 || decoded.status === 304;
 		if (bodyless) await decoded.body.pipeTo(new WritableStream());
 		try {
@@ -165,6 +165,11 @@ export class BHttpDecoder {
 			await cancelQuietly(decoded.body, error);
 			throw error;
 		}
+	}
+
+	// Per-call options override the constructor's; unset fields inherit them.
+	private streamOptions(options: BHttpStreamDecoderOptions): BHttpStreamDecoderOptions {
+		return { ...options, maxMetadataSize: options.maxMetadataSize ?? this._maxMetadataSize };
 	}
 
 	private decodeRequestMessage(ctx: DecoderContext, knownLength: boolean): Request {
