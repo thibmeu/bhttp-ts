@@ -162,6 +162,12 @@ Set an explicit encoded-size limit, for example `{ padding: 1024, maxMessageSize
 - `decodeRequestStream(stream: ReadableStream<Uint8Array>): Promise<Request>` - Decode a streaming BHTTP request
 - `decodeResponseStream(stream: ReadableStream<Uint8Array>): Promise<Response>` - Decode a streaming BHTTP response
 
+Decoders default to a 64 KiB metadata limit per message, including control data,
+informational responses, headers, and trailers. Body and padding bytes are
+excluded. Set `new BHttpDecoder({ maxMetadataSize })` to override it.
+Fetch request decoding accepts HTTP and HTTPS, rejects mismatched Host headers,
+and rejects content on GET and HEAD requests.
+
 ### BHttpRequestStreamEncoder / BHttpResponseStreamEncoder
 
 For encoding indeterminate-length messages incrementally.

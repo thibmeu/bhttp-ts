@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { BHttpDecoder } from "../src/decoder";
 import { BHttpEncoder } from "../src/encoder";
-import { MessageLimitExceededError } from "../src/errors";
+import { InvalidMessageError, MessageLimitExceededError } from "../src/errors";
 import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "../src/stream-encoder";
 
 import { collectBytes } from "./utils";
@@ -150,19 +150,59 @@ describe("Fetch streaming API", () => {
 
 	it.each([
 		["CONNECT request", () => requestPreamble("CONNECT")],
+		["non-HTTP request", () => requestPreamble("GET", "file")],
+		["invalid authority request", () => requestPreamble("GET", "https", ":80")],
+		["mismatched Host request", () => requestPreamble("GET", "https", "example.com", "other.test")],
+		[
+			"invalid header name request",
+			() =>
+				Uint8Array.of(
+					...requestPreamble("GET").subarray(0, -1),
+					5,
+					104,
+					111,
+					0xad,
+					115,
+					116,
+					1,
+					120,
+					0,
+				),
+		],
 		["invalid response status", invalidResponsePreamble],
-	])("should cancel the input when constructing an %s fails", async (name, preamble) => {
-		// Arrange
-		const source = bodylessMessage(preamble());
-
-		// Act / Assert
+	])("should classify and cancel invalid input for a %s", async (name, preamble) => {
+		const bytes = preamble();
+		const source = bodylessMessage(bytes);
+		const decoder = new BHttpDecoder();
 		if (name.endsWith("request")) {
-			await expect(new BHttpDecoder().decodeRequestStream(source.stream)).rejects.toThrow();
+			expect(() => decoder.decodeRequest(bytes)).toThrow(InvalidMessageError);
+			await expect(decoder.decodeRequestStream(source.stream)).rejects.toThrow(InvalidMessageError);
 		} else {
-			await expect(new BHttpDecoder().decodeResponseStream(source.stream)).rejects.toThrow();
+			await expect(decoder.decodeResponseStream(source.stream)).rejects.toThrow(
+				InvalidMessageError,
+			);
 		}
 		expect(source.cancelled).toBe(true);
 		expect(source.stream.locked).toBe(false);
+	});
+
+	it("should reject GET content and cancel after the first content chunk", async () => {
+		const encoder = new BHttpRequestStreamEncoder();
+		const preamble = encoder.encodePreamble("GET", "https", "example.com", "/", new Headers());
+		const source = framedBody(preamble, encoder, 100);
+		const decoder = new BHttpDecoder();
+
+		// The same preamble works with either framing because the field section is empty.
+		for (const framing of [0, 2]) {
+			const bytes = Uint8Array.of(framing, ...preamble.subarray(1), 1, 120, 0, 0);
+			expect(() => decoder.decodeRequest(bytes)).toThrow(
+				"GET and HEAD requests cannot have content",
+			);
+		}
+		await expect(decoder.decodeRequestStream(source.stream)).rejects.toThrow(InvalidMessageError);
+		expect(source.cancelled).toBe(true);
+		expect(source.stream.locked).toBe(false);
+		expect(source.pulls).toBeLessThanOrEqual(3);
 	});
 
 	it("should reject a response when a request is expected", async () => {
@@ -268,13 +308,18 @@ function framedBody(preamble: Uint8Array, encoder: BHttpRequestStreamEncoder, to
 	};
 }
 
-function requestPreamble(method: string): Uint8Array {
+function requestPreamble(
+	method: string,
+	scheme = "https",
+	authority = "example.com",
+	host?: string,
+): Uint8Array {
 	return new BHttpRequestStreamEncoder().encodePreamble(
 		method,
-		"https",
-		"example.com",
+		scheme,
+		authority,
 		"/",
-		new Headers(),
+		new Headers(host === undefined ? {} : { host }),
 	);
 }
 

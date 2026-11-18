@@ -1,125 +1,106 @@
 import { tryReadFrom, MAX as VLI_MAX } from "quicvarint";
 import * as errors from "./errors";
 import {
-	appendField,
 	BHttpStreamDecoder,
 	type BHttpStreamDecoderOptions,
 	decodeByteString,
+	FieldSection,
+	metadataSizeLimit,
 } from "./stream-decoder";
 
 const EMPTY_CONTENT = new Uint8Array(0);
 
-// Stop fields bleeding into the host, e.g. "example.com" + ".evil.example/x".
-function requestUrl(scheme: string, authority: string, path: string): string {
-	if (!/^[a-z][a-z0-9+.-]*$/i.test(scheme)) {
-		throw new errors.InvalidMessageError("Invalid scheme");
-	}
-	if (authority === "" || /[/\\?#@\s]/.test(authority)) {
-		throw new errors.InvalidMessageError("Invalid authority");
+function isBodylessRequest(method: string): boolean {
+	const upper = method.toUpperCase();
+	return upper === "GET" || upper === "HEAD";
+}
+
+function requestUrl(scheme: string, authority: string, path: string, headers: Headers): string {
+	if (!/^https?$/i.test(scheme)) {
+		throw new errors.InvalidMessageError("Request scheme must be http or https");
 	}
 	if (!path.startsWith("/")) {
 		throw new errors.InvalidMessageError("Invalid path");
 	}
-	return `${scheme}://${authority}${path}`;
+
+	const host = headers.get("host");
+	authority ||= host ?? "";
+	const origin = requestOrigin(scheme, authority);
+	if (
+		host !== null &&
+		host !== authority &&
+		new URL(requestOrigin(scheme, host)).host !== new URL(origin).host
+	) {
+		throw new errors.InvalidMessageError("Host header does not match request authority");
+	}
+	return origin + path;
 }
 
-class InformationalResponse {
-	public status: number;
-	public headers: Headers;
+function requestOrigin(scheme: string, authority: string): string {
+	if (authority === "" || /[/\\?#@,\s]/.test(authority)) {
+		throw new errors.InvalidMessageError("Invalid authority");
+	}
+	return `${scheme}://${authority}`;
+}
 
-	constructor(status: number) {
-		this.status = status;
-		this.headers = new Headers();
+function createRequest(
+	{ scheme, authority, path, method, headers }: RequestStreamPreamble,
+	body: BodyInit | null,
+): Request {
+	try {
+		return new Request(requestUrl(scheme, authority, path, headers), {
+			method,
+			headers,
+			body,
+			duplex: "half",
+		} as RequestInit & { duplex: "half" });
+	} catch (cause) {
+		if (!(cause instanceof TypeError)) throw cause;
+		throw new errors.InvalidMessageError("Invalid HTTP request", { cause });
 	}
 }
 
 class DecoderContext {
-	public buf: Uint8Array;
 	public p = 0;
 	public framingIndicator = 0;
-	public headers: Headers;
-	public content: Uint8Array;
-	public trailers: Headers;
+	public content: Uint8Array = EMPTY_CONTENT;
 
-	constructor(buf: Uint8Array) {
-		this.buf = buf;
-		this.headers = new Headers();
-		this.content = EMPTY_CONTENT;
-		this.trailers = new Headers();
-	}
-}
+	constructor(
+		public buf: Uint8Array,
+		public metadataRemaining: number,
+	) {}
 
-class RequestDecoderContext extends DecoderContext {
-	public method = "";
-	public scheme = "";
-	public authority = "";
-	public path = "";
-
-	public createRequest(): Request {
-		const input = requestUrl(this.scheme, this.authority, this.path);
-		let req: Request;
-
-		if (this.method === "GET" || this.method === "HEAD") {
-			req = new Request(input, {
-				method: this.method,
-				headers: this.headers,
-			});
-		} else {
-			// Reuse the empty buffer; copy content into an owned ArrayBuffer.
-			const bodyBuffer =
-				this.content.length === 0
-					? EMPTY_CONTENT.buffer
-					: (new Uint8Array(this.content).buffer as ArrayBuffer);
-			req = new Request(input, {
-				method: this.method,
-				headers: this.headers,
-				body: bodyBuffer,
-			});
+	public chargeMetadata(size: number): void {
+		this.metadataRemaining -= size;
+		if (this.metadataRemaining < 0) {
+			throw new errors.MetadataLimitExceededError("BHTTP metadata exceeds the configured limit");
 		}
-		return req;
 	}
 }
 
-class ResponseDecoderContext extends DecoderContext {
-	public status = 0;
-	public informationalResponses: InformationalResponse[];
-
-	constructor(buf: Uint8Array) {
-		super(buf);
-		this.informationalResponses = new Array(0);
-	}
-
-	public createResponse(): Response {
-		// Reuse the empty buffer; copy content into an owned ArrayBuffer.
-		const bodyBuffer =
-			this.content.length === 0
-				? EMPTY_CONTENT.buffer
-				: (new Uint8Array(this.content).buffer as ArrayBuffer);
-		const bodyless = this.status === 204 || this.status === 205 || this.status === 304;
-		return new Response(bodyless ? null : bodyBuffer, {
-			status: this.status,
-			headers: this.headers,
-		});
-	}
+function copyContent(content: Uint8Array): ArrayBuffer {
+	return content.length === 0 ? EMPTY_CONTENT.buffer : new Uint8Array(content).buffer;
 }
 
 export class BHttpDecoder {
-	private _td: TextDecoder;
+	private readonly _td = new TextDecoder();
+	private readonly _maxMetadataSize: number;
 
-	constructor() {
-		this._td = new TextDecoder();
+	constructor(options: BHttpStreamDecoderOptions = {}) {
+		this._maxMetadataSize = metadataSizeLimit(options);
 	}
 
 	public decodeRequest(src: ArrayBuffer | Uint8Array): Request {
 		const bytes = src instanceof ArrayBuffer ? new Uint8Array(src) : src;
-		const ctx = new RequestDecoderContext(bytes);
+		const ctx = new DecoderContext(bytes, this._maxMetadataSize);
 		ctx.framingIndicator = this.decodeVli(ctx);
+		ctx.chargeMetadata(ctx.p);
 
 		switch (ctx.framingIndicator) {
 			case 0:
-				return this.decodeKnownLengthRequest(ctx);
+				return this.decodeRequestMessage(ctx, true);
 			case 2:
-				return this.decodeIndeterminateLengthRequest(ctx);
+				return this.decodeRequestMessage(ctx, false);
 			default:
 				throw new errors.InvalidMessageError("Invalid framing indicator.");
 		}
@@ -127,14 +108,15 @@ export class BHttpDecoder {
 
 	public decodeResponse(src: ArrayBuffer | Uint8Array): Response {
 		const bytes = src instanceof ArrayBuffer ? new Uint8Array(src) : src;
-		const ctx = new ResponseDecoderContext(bytes);
+		const ctx = new DecoderContext(bytes, this._maxMetadataSize);
 		ctx.framingIndicator = this.decodeVli(ctx);
+		ctx.chargeMetadata(ctx.p);
 
 		switch (ctx.framingIndicator) {
 			case 1:
-				return this.decodeKnownLengthResponse(ctx);
+				return this.decodeResponseMessage(ctx, true);
 			case 3:
-				return this.decodeIndeterminateLengthResponse(ctx);
+				return this.decodeResponseMessage(ctx, false);
 			default:
 				throw new errors.InvalidMessageError("Invalid framing indicator.");
 		}
@@ -143,19 +125,23 @@ export class BHttpDecoder {
 	/** Decode a BHTTP byte stream into a Request whose body remains streaming. */
 	public async decodeRequestStream(
 		src: ReadableStream<Uint8Array>,
-		options: BHttpStreamDecoderOptions = {},
+		options: BHttpStreamDecoderOptions = { maxMetadataSize: this._maxMetadataSize },
 	): Promise<Request> {
 		const decoded = await decodeStream(src, "request", options);
-		const bodyless =
-			decoded.method.toUpperCase() === "GET" || decoded.method.toUpperCase() === "HEAD";
-		if (bodyless) await decoded.body.pipeTo(new WritableStream());
+		const bodyless = isBodylessRequest(decoded.method);
 		try {
-			return new Request(requestUrl(decoded.scheme, decoded.authority, decoded.path), {
-				method: decoded.method,
-				headers: decoded.headers,
-				body: bodyless ? null : decoded.body,
-				duplex: "half",
-			} as RequestInit & { duplex: "half" });
+			const request = createRequest(decoded, bodyless ? null : decoded.body);
+			if (bodyless) {
+				const reader = decoded.body.getReader();
+				try {
+					if (!(await reader.read()).done) {
+						throw new errors.InvalidMessageError("GET and HEAD requests cannot have content");
+					}
+				} finally {
+					reader.releaseLock();
+				}
+			}
+			return request;
 		} catch (error) {
 			await cancelQuietly(decoded.body, error);
 			throw error;
@@ -165,7 +151,7 @@ export class BHttpDecoder {
 	/** Decode a BHTTP byte stream into a Response whose body remains streaming. */
 	public async decodeResponseStream(
 		src: ReadableStream<Uint8Array>,
-		options: BHttpStreamDecoderOptions = {},
+		options: BHttpStreamDecoderOptions = { maxMetadataSize: this._maxMetadataSize },
 	): Promise<Response> {
 		const decoded = await decodeStream(src, "response", options);
 		const bodyless = decoded.status === 204 || decoded.status === 205 || decoded.status === 304;
@@ -181,210 +167,81 @@ export class BHttpDecoder {
 		}
 	}
 
-	private decodeKnownLengthRequest(ctx: RequestDecoderContext): Request {
-		this.decodeRequestControlData(ctx);
-		this.decodeKnownLengthRequestHeaders(ctx);
-		this.decodeKnownLengthContent(ctx);
-		this.decodeKnownLengthTrailers(ctx);
-		this.checkPadding(ctx);
-		return ctx.createRequest();
+	private decodeRequestMessage(ctx: DecoderContext, knownLength: boolean): Request {
+		const method = this.decodeVliAndValue(ctx);
+		const scheme = this.decodeVliAndValue(ctx);
+		const authority = this.decodeVliAndValue(ctx);
+		const path = this.decodeVliAndValue(ctx);
+		const headers = this.decodeFields(ctx, knownLength);
+		const bodyless = isBodylessRequest(method);
+		this.decodePayload(ctx, knownLength, bodyless);
+		return createRequest(
+			{ method, scheme, authority, path, headers },
+			bodyless ? null : copyContent(ctx.content),
+		);
 	}
 
-	private decodeIndeterminateLengthRequest(ctx: RequestDecoderContext): Request {
-		this.decodeRequestControlData(ctx);
-		this.decodeIndeterminateLengthRequestHeaders(ctx);
-		this.decodeIndeterminateLengthContent(ctx);
-		this.decodeIndeterminateLengthTrailers(ctx);
-		this.checkPadding(ctx);
-		return ctx.createRequest();
-	}
-
-	private decodeKnownLengthResponse(ctx: ResponseDecoderContext): Response {
-		this.decodeKnownLengthInformationalResponsesAndHeaders(ctx);
-		this.decodeKnownLengthContent(ctx);
-		this.decodeKnownLengthTrailers(ctx);
-		this.checkPadding(ctx);
-		return ctx.createResponse();
-	}
-
-	private decodeIndeterminateLengthResponse(ctx: ResponseDecoderContext): Response {
-		this.decodeIndeterminateLengthInformationalResponsesAndHeaders(ctx);
-		this.decodeIndeterminateLengthContent(ctx);
-		this.decodeIndeterminateLengthTrailers(ctx);
-		this.checkPadding(ctx);
-		return ctx.createResponse();
-	}
-
-	private decodeRequestControlData(ctx: RequestDecoderContext) {
-		ctx.method = this.decodeVliAndValue(ctx);
-		ctx.scheme = this.decodeVliAndValue(ctx);
-		ctx.authority = this.decodeVliAndValue(ctx);
-		ctx.path = this.decodeVliAndValue(ctx);
-		return;
-	}
-
-	private decodeKnownLengthInformationalResponsesAndHeaders(ctx: ResponseDecoderContext) {
-		let status = this.decodeVli(ctx);
-		while (status >= 100 && status < 200) {
-			this.decodeKnownLengthInformationalResponse(ctx, status);
-			status = this.decodeVli(ctx);
-		}
-		if (status < 200 || status >= 600) {
-			throw new errors.InvalidMessageError("Invalid status code.");
-		}
-		ctx.status = status;
-		this.decodeKnownLengthResponseHeaders(ctx);
-		return;
-	}
-
-	private decodeIndeterminateLengthInformationalResponsesAndHeaders(ctx: ResponseDecoderContext) {
-		let status = this.decodeVli(ctx);
-		while (status >= 100 && status < 200) {
-			this.decodeIndeterminateLengthInformationalResponse(ctx, status);
-			status = this.decodeVli(ctx);
-		}
-		if (status < 200 || status >= 600) {
-			throw new errors.InvalidMessageError("Invalid status code.");
-		}
-		ctx.status = status;
-		this.decodeIndeterminateLengthResponseHeaders(ctx);
-		return;
-	}
-
-	private decodeKnownLengthInformationalResponse(ctx: ResponseDecoderContext, status: number) {
-		const ir = new InformationalResponse(status);
-
-		const len = this.decodeVli(ctx);
-		let name = "";
-		let value = "";
-		const base = ctx.p;
-		const end = base + len;
-		if (len > ctx.buf.length - base) {
-			throw new errors.InvalidMessageError("Unexpected end of buffer");
-		}
-		const buf = ctx.buf;
-		ctx.buf = buf.subarray(0, end);
-		while (ctx.p < end) {
-			name = this.decodeVliAndValue(ctx, true);
-			value = this.decodeVliAndValue(ctx, true);
-			appendField(ir.headers, name, value);
-		}
-		ctx.buf = buf;
-		ctx.informationalResponses.push(ir);
-		return;
-	}
-
-	private decodeIndeterminateLengthInformationalResponse(
-		ctx: ResponseDecoderContext,
-		status: number,
-	) {
-		const ir = new InformationalResponse(status);
-
-		let name = "";
-		let value = "";
-		let nameStart = ctx.p;
-		let terminator = this.decodeVli(ctx);
-		while (terminator !== 0) {
-			ctx.p = nameStart;
-			name = this.decodeVliAndValue(ctx, true);
-			value = this.decodeVliAndValue(ctx, true);
-			appendField(ir.headers, name, value);
-			nameStart = ctx.p;
-			terminator = this.decodeVli(ctx);
-		}
-		ctx.informationalResponses.push(ir);
-		return;
-	}
-
-	private decodeKnownLengthRequestHeaders(ctx: RequestDecoderContext) {
-		let name = "";
-		let value = "";
-		const len = this.decodeVli(ctx);
-		const base = ctx.p;
-		const end = base + len;
-		if (len > ctx.buf.length - base) {
-			throw new errors.InvalidMessageError("Unexpected end of buffer");
-		}
-		const buf = ctx.buf;
-		ctx.buf = buf.subarray(0, end);
-		while (ctx.p < end) {
-			name = this.decodeVliAndValue(ctx, true);
-			value = this.decodeVliAndValue(ctx, true);
-			if (
-				name.localeCompare("host", undefined, { sensitivity: "accent" }) === 0 &&
-				ctx.authority === ""
-			) {
-				ctx.authority = value;
+	private decodeResponseMessage(ctx: DecoderContext, knownLength: boolean): Response {
+		for (;;) {
+			const start = ctx.p;
+			const status = this.decodeVli(ctx);
+			ctx.chargeMetadata(ctx.p - start);
+			if (status < 100 || status >= 600) {
+				throw new errors.InvalidMessageError("Invalid status code.");
 			}
-			appendField(ctx.headers, name, value);
+			const headers = this.decodeFields(ctx, knownLength);
+			if (status < 200) continue;
+
+			this.decodePayload(ctx, knownLength);
+			const bodyless = status === 204 || status === 205 || status === 304;
+			return new Response(bodyless ? null : copyContent(ctx.content), { status, headers });
 		}
-		ctx.buf = buf;
-		return;
 	}
 
-	private decodeKnownLengthResponseHeaders(ctx: ResponseDecoderContext) {
-		let name = "";
-		let value = "";
-		const len = this.decodeVli(ctx);
-		const base = ctx.p;
-		const end = base + len;
-		if (len > ctx.buf.length - base) {
-			throw new errors.InvalidMessageError("Unexpected end of buffer");
-		}
-		const buf = ctx.buf;
-		ctx.buf = buf.subarray(0, end);
-		while (ctx.p < end) {
-			name = this.decodeVliAndValue(ctx, true);
-			value = this.decodeVliAndValue(ctx, true);
-			appendField(ctx.headers, name, value);
-		}
-		ctx.buf = buf;
-		return;
+	private decodePayload(ctx: DecoderContext, knownLength: boolean, bodyless = false): void {
+		if (knownLength) this.decodeKnownLengthContent(ctx, bodyless);
+		else this.decodeIndeterminateLengthContent(ctx, bodyless);
+		if (!this.isAtEnd(ctx)) this.decodeFields(ctx, knownLength);
+		this.checkPadding(ctx);
 	}
 
-	private decodeIndeterminateLengthRequestHeaders(ctx: RequestDecoderContext) {
-		let name = "";
-		let value = "";
-		let nameStart = ctx.p;
-		let terminator = this.decodeVli(ctx);
-		while (terminator !== 0) {
-			ctx.p = nameStart;
-			name = this.decodeVliAndValue(ctx, true);
-			value = this.decodeVliAndValue(ctx, true);
-			if (
-				name.localeCompare("host", undefined, { sensitivity: "accent" }) === 0 &&
-				ctx.authority === ""
-			) {
-				ctx.authority = value;
+	private decodeFields(ctx: DecoderContext, knownLength: boolean): Headers {
+		const fields = new FieldSection();
+		if (knownLength) {
+			const start = ctx.p;
+			const len = this.decodeVli(ctx);
+			const end = ctx.p + len;
+			ctx.chargeMetadata(end - start);
+			const buf = ctx.buf;
+			if (end > buf.length) {
+				throw new errors.InvalidMessageError("Unexpected end of buffer");
 			}
-			appendField(ctx.headers, name, value);
-			nameStart = ctx.p;
-			terminator = this.decodeVli(ctx);
+			ctx.buf = buf.subarray(0, end);
+			while (ctx.p < end) {
+				fields.append(
+					this.decodeVliAndValue(ctx, true, false),
+					this.decodeVliAndValue(ctx, true, false),
+				);
+			}
+			ctx.buf = buf;
+		} else {
+			for (;;) {
+				const name = this.decodeVliAndValue(ctx, true);
+				if (name === "") break;
+				fields.append(name, this.decodeVliAndValue(ctx, true));
+			}
 		}
-		return;
+		return fields.finish();
 	}
 
-	private decodeIndeterminateLengthResponseHeaders(ctx: ResponseDecoderContext) {
-		let name = "";
-		let value = "";
-		let nameStart = ctx.p;
-		let terminator = this.decodeVli(ctx);
-		while (terminator !== 0) {
-			ctx.p = nameStart;
-			name = this.decodeVliAndValue(ctx, true);
-			value = this.decodeVliAndValue(ctx, true);
-			appendField(ctx.headers, name, value);
-			nameStart = ctx.p;
-			terminator = this.decodeVli(ctx);
-		}
-		return;
-	}
-
-	private decodeKnownLengthContent(ctx: DecoderContext) {
+	private decodeKnownLengthContent(ctx: DecoderContext, bodyless: boolean) {
 		if (this.isAtEnd(ctx)) {
 			return;
 		}
 		const len = this.decodeVli(ctx);
+		if (bodyless && len !== 0) {
+			throw new errors.InvalidMessageError("GET and HEAD requests cannot have content");
+		}
 		if (len > ctx.buf.length - ctx.p) {
 			throw new errors.InvalidMessageError("Unexpected end of buffer");
 		}
@@ -395,13 +252,16 @@ export class BHttpDecoder {
 		return;
 	}
 
-	private decodeIndeterminateLengthContent(ctx: DecoderContext) {
+	private decodeIndeterminateLengthContent(ctx: DecoderContext, bodyless: boolean) {
 		if (this.isAtEnd(ctx)) {
 			return;
 		}
 		let len = 0;
 		const p = ctx.p;
 		let terminator = this.decodeVli(ctx);
+		if (bodyless && terminator !== 0) {
+			throw new errors.InvalidMessageError("GET and HEAD requests cannot have content");
+		}
 		while (terminator !== 0) {
 			if (terminator > ctx.buf.length - ctx.p) {
 				throw new errors.InvalidMessageError("Unexpected end of buffer");
@@ -426,48 +286,6 @@ export class BHttpDecoder {
 		return;
 	}
 
-	private decodeKnownLengthTrailers(ctx: DecoderContext) {
-		if (this.isAtEnd(ctx)) {
-			return;
-		}
-		const len = this.decodeVli(ctx);
-		let name = "";
-		let value = "";
-		const base = ctx.p;
-		const end = base + len;
-		if (len > ctx.buf.length - base) {
-			throw new errors.InvalidMessageError("Unexpected end of buffer");
-		}
-		const buf = ctx.buf;
-		ctx.buf = buf.subarray(0, end);
-		while (ctx.p < end) {
-			name = this.decodeVliAndValue(ctx, true);
-			value = this.decodeVliAndValue(ctx, true);
-			appendField(ctx.trailers, name, value);
-		}
-		ctx.buf = buf;
-		return;
-	}
-
-	private decodeIndeterminateLengthTrailers(ctx: DecoderContext) {
-		if (this.isAtEnd(ctx)) {
-			return;
-		}
-		let name = "";
-		let value = "";
-		let nameStart = ctx.p;
-		let terminator = this.decodeVli(ctx);
-		while (terminator !== 0) {
-			ctx.p = nameStart;
-			name = this.decodeVliAndValue(ctx, true);
-			value = this.decodeVliAndValue(ctx, true);
-			appendField(ctx.trailers, name, value);
-			nameStart = ctx.p;
-			terminator = this.decodeVli(ctx);
-		}
-		return;
-	}
-
 	// RFC 9292 Section 3.8 lets the encoder drop an empty trailer section, plus an
 	// empty content section when the trailers are dropped too. A decoder reads
 	// those missing fields as a length of zero. Only the trailing sections can go;
@@ -487,22 +305,22 @@ export class BHttpDecoder {
 		return;
 	}
 
-	private decodeVliAndValue(ctx: DecoderContext, byteString = false): string {
+	private decodeVliAndValue(
+		ctx: DecoderContext,
+		byteString = false,
+		chargeMetadata = true,
+	): string {
+		const start = ctx.p;
 		const len = this.decodeVli(ctx);
 		const end = ctx.p + len;
+		if (chargeMetadata) ctx.chargeMetadata(end - start);
 		if (end > ctx.buf.length) {
 			throw new errors.InvalidMessageError("Unexpected end of buffer");
 		}
 		// A view avoids a field copy.
 		const bytes = ctx.buf.subarray(ctx.p, end);
-		let res = "";
-		if (byteString) {
-			res = decodeByteString(bytes);
-		} else {
-			res = this._td.decode(bytes);
-		}
 		ctx.p = end;
-		return res;
+		return byteString ? decodeByteString(bytes) : this._td.decode(bytes);
 	}
 
 	private decodeVli(ctx: DecoderContext): number {

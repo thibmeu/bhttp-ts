@@ -28,13 +28,43 @@ export function decodeByteString(bytes: Uint8Array): string {
 	return value;
 }
 
-/** Append a field using the Cookie separator required by RFC 9292. */
-export function appendField(headers: Headers, name: string, value: string): void {
-	if (name.length === 6 && name.toLowerCase() === "cookie" && headers.has(name)) {
-		const normalized = new Headers([[name, value]]).get(name) ?? "";
-		headers.set(name, `${headers.get(name)}; ${normalized}`);
-	} else {
-		headers.append(name, value);
+/** Collect split Cookie fields for the RFC 9292 "; " join. */
+export class FieldSection {
+	private readonly headers = new Headers();
+	private cookies: string[] | undefined;
+
+	append(name: string, value: string): void {
+		if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) {
+			throw new InvalidMessageError("Invalid field name");
+		}
+		try {
+			if (name.length === 6 && name.toLowerCase() === "cookie") {
+				// Match Fetch's normalization for each field before combining them.
+				value = value.replace(/^[ \t\r\n]+|(?<![ \t\r\n])[ \t\r\n]+$/g, "");
+				if (value.includes("\0") || value.includes("\r") || value.includes("\n")) {
+					throw new InvalidMessageError("Invalid Cookie field value");
+				}
+				this.cookies ??= [];
+				this.cookies.push(value);
+			} else {
+				this.headers.append(name, value);
+			}
+		} catch (cause) {
+			if (!(cause instanceof TypeError)) throw cause;
+			throw new InvalidMessageError("Invalid field name or value", { cause });
+		}
+	}
+
+	get empty(): boolean {
+		return this.cookies === undefined && this.headers.keys().next().done === true;
+	}
+
+	finish(): Headers {
+		if (this.cookies !== undefined) {
+			this.headers.append("cookie", this.cookies.join("; "));
+			this.cookies = undefined;
+		}
+		return this.headers;
 	}
 }
 
@@ -52,6 +82,14 @@ export interface BHttpStreamDecoderOptions {
 	 * @default 65536
 	 */
 	readonly maxMetadataSize?: number;
+}
+
+export function metadataSizeLimit(options: BHttpStreamDecoderOptions): number {
+	const limit = options.maxMetadataSize ?? DEFAULT_MAX_METADATA_SIZE;
+	if (!Number.isSafeInteger(limit) || limit < 0) {
+		throw new RangeError(`maxMetadataSize must be a non-negative integer, got ${limit}`);
+	}
+	return limit;
 }
 
 /**
@@ -172,7 +210,7 @@ export class BHttpStreamDecoder {
 	private _contentStarted = false;
 
 	// Accumulated headers/trailers
-	private _headers = new Headers();
+	private _fields = new FieldSection();
 	// A consumed name stays pending until its value arrives; completed fields are never reparsed.
 	private _pendingHeaderName: string | null = null;
 	private readonly _maxMetadataSize: number;
@@ -180,13 +218,7 @@ export class BHttpStreamDecoder {
 	private _metadataBytes = 0;
 
 	constructor(options: BHttpStreamDecoderOptions = {}) {
-		const maxMetadataSize = options.maxMetadataSize ?? DEFAULT_MAX_METADATA_SIZE;
-		if (!Number.isSafeInteger(maxMetadataSize) || maxMetadataSize < 0) {
-			throw new RangeError(
-				`maxMetadataSize must be a non-negative integer, got ${maxMetadataSize}`,
-			);
-		}
-		this._maxMetadataSize = maxMetadataSize;
+		this._maxMetadataSize = metadataSizeLimit(options);
 	}
 
 	private _chargeMetadata(bytes: number): void {
@@ -280,7 +312,7 @@ export class BHttpStreamDecoder {
 			(this._phase === "content-indeterminate" && !this._contentStarted) ||
 			(this._phase === "trailers-indeterminate" &&
 				this._pendingHeaderName === null &&
-				this._headers.keys().next().done);
+				this._fields.empty);
 		const atKnownBoundary =
 			(this._phase === "content-known" || this._phase === "trailers-known") &&
 			!this._knownSectionLenRead;
@@ -421,7 +453,6 @@ export class BHttpStreamDecoder {
 		}
 
 		// Move to headers
-		this._headers = new Headers();
 		this._phase = this._isKnownLength ? "headers-known" : "headers-indeterminate";
 		return null;
 	}
@@ -443,7 +474,6 @@ export class BHttpStreamDecoder {
 		if (status >= 100 && status < 200) {
 			if (this._informationalStatus === null) {
 				this._informationalStatus = status;
-				this._headers = new Headers();
 			}
 
 			// Try to parse headers for informational response
@@ -458,9 +488,9 @@ export class BHttpStreamDecoder {
 			const event: BHttpInformationalEvent = {
 				type: "informational",
 				status,
-				headers: this._headers,
+				headers: this._fields.finish(),
 			};
-			this._headers = new Headers();
+			this._fields = new FieldSection();
 			this._knownSectionLenRead = false;
 			this._informationalStatus = null;
 			return event;
@@ -472,7 +502,6 @@ export class BHttpStreamDecoder {
 		}
 
 		this._status = status;
-		this._headers = new Headers();
 		this._phase = this._isKnownLength ? "headers-known" : "headers-indeterminate";
 
 		return null;
@@ -485,12 +514,10 @@ export class BHttpStreamDecoder {
 		| undefined {
 		const saveOffset = this._offset;
 		const saveMetadataBytes = this._metadataBytes;
-		const saveHeaders = new Headers(this._headers);
 
 		const complete = this._tryParseKnownLengthHeaders();
 		if (!complete) {
 			this._offset = saveOffset;
-			this._headers = saveHeaders;
 			this._knownSectionLenRead = false;
 			this._metadataBytes = saveMetadataBytes;
 			return undefined;
@@ -543,20 +570,13 @@ export class BHttpStreamDecoder {
 			const value = this._tryDecodeVliString(false, true);
 			if (value === undefined) return false;
 
-			if (
-				this._isRequest &&
-				name.localeCompare("host", undefined, { sensitivity: "accent" }) === 0 &&
-				this._authority === ""
-			) {
-				this._authority = value;
-			}
-			appendField(this._headers, name, value);
+			this._fields.append(name, value);
 		}
 
 		return true;
 	}
 
-	private _tryParseIndeterminateLengthHeaders(setAuthority = true): boolean {
+	private _tryParseIndeterminateLengthHeaders(): boolean {
 		// Headers terminated by Name Length = 0
 		while (true) {
 			// If we have a pending header name, try to get value
@@ -564,16 +584,7 @@ export class BHttpStreamDecoder {
 				const value = this._tryDecodeVliString(true, true);
 				if (value === undefined) return false;
 
-				if (
-					setAuthority &&
-					this._isRequest &&
-					this._pendingHeaderName.localeCompare("host", undefined, { sensitivity: "accent" }) ===
-						0 &&
-					this._authority === ""
-				) {
-					this._authority = value;
-				}
-				appendField(this._headers, this._pendingHeaderName, value);
+				this._fields.append(this._pendingHeaderName, value);
 				this._pendingHeaderName = null;
 				continue;
 			}
@@ -599,20 +610,21 @@ export class BHttpStreamDecoder {
 	}
 
 	private _emitPreambleEvent(): BHttpRequestPreambleEvent | BHttpResponsePreambleEvent {
+		const headers = this._fields.finish();
 		if (this._isRequest) {
 			return {
 				type: "request-preamble",
 				method: this._method,
 				scheme: this._scheme,
-				authority: this._authority,
+				authority: this._authority || headers.get("host") || "",
 				path: this._path,
-				headers: this._headers,
+				headers,
 			};
 		}
 		return {
 			type: "response-preamble",
 			status: this._status,
-			headers: this._headers,
+			headers,
 		};
 	}
 
@@ -659,7 +671,7 @@ export class BHttpStreamDecoder {
 				// Terminator - move to trailers
 				this._offset = this._vli.p;
 				this._phase = "trailers-indeterminate";
-				this._headers = new Headers();
+				this._fields = new FieldSection();
 				this._pendingHeaderName = null;
 				return null;
 			}
@@ -714,7 +726,7 @@ export class BHttpStreamDecoder {
 		}
 
 		// Parse trailers
-		const trailers = new Headers();
+		const trailers = new FieldSection();
 		while (this._offset < this._knownSectionEnd) {
 			const name = this._tryDecodeVliString(false, true);
 			if (name === undefined) {
@@ -728,25 +740,25 @@ export class BHttpStreamDecoder {
 				this._knownSectionLenRead = false;
 				return undefined;
 			}
-			appendField(trailers, name, value);
+			trailers.append(name, value);
 		}
 
 		this._phase = "padding";
 		this._knownSectionLenRead = false;
-		return { type: "trailers", headers: trailers };
+		return { type: "trailers", headers: trailers.finish() };
 	}
 
 	private _processTrailersIndeterminate(): BHttpTrailersEvent | null | undefined {
-		if (!this._tryParseIndeterminateLengthHeaders(false)) return undefined;
+		if (!this._tryParseIndeterminateLengthHeaders()) return undefined;
 
 		this._phase = "padding";
 
 		// Only emit trailers event if there are any
-		if (this._headers.keys().next().done) {
+		if (this._fields.empty) {
 			return null;
 		}
 
-		return { type: "trailers", headers: this._headers };
+		return { type: "trailers", headers: this._fields.finish() };
 	}
 
 	/**
