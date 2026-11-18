@@ -17,6 +17,12 @@ const FRAMING_REQUEST_INDETERMINATE = 2;
 const FRAMING_RESPONSE_INDETERMINATE = 3;
 
 const textDecoder = new TextDecoder();
+const fetchRequest = Symbol("Fetch request decoding");
+
+export function isBodylessRequest(method: string): boolean {
+	const upper = method.toUpperCase();
+	return upper === "GET" || upper === "HEAD";
+}
 
 export function decodeByteString(bytes: Uint8Array): string {
 	// Convert bytes in bounded calls to stay below engine argument limits.
@@ -90,6 +96,13 @@ export function metadataSizeLimit(options: BHttpStreamDecoderOptions): number {
 		throw new RangeError(`maxMetadataSize must be a non-negative integer, got ${limit}`);
 	}
 	return limit;
+}
+
+export function createFetchRequestStreamDecoder(
+	options: BHttpStreamDecoderOptions,
+): BHttpStreamDecoder {
+	const fetchOptions = { ...options, [fetchRequest]: true };
+	return new BHttpStreamDecoder(fetchOptions);
 }
 
 /**
@@ -188,6 +201,8 @@ export class BHttpStreamDecoder {
 	private _isKnownLength = false;
 
 	// Request control data (accumulated across calls)
+	private readonly _fetchRequest: boolean;
+	private _bodylessRequest = false;
 	private _method = "";
 	private _scheme = "";
 	private _authority = "";
@@ -219,6 +234,7 @@ export class BHttpStreamDecoder {
 
 	constructor(options: BHttpStreamDecoderOptions = {}) {
 		this._maxMetadataSize = metadataSizeLimit(options);
+		this._fetchRequest = fetchRequest in options;
 	}
 
 	private _chargeMetadata(bytes: number): void {
@@ -438,6 +454,7 @@ export class BHttpStreamDecoder {
 			switch (this._controlStep) {
 				case 0:
 					this._method = str;
+					this._bodylessRequest = this._fetchRequest && isBodylessRequest(str);
 					break;
 				case 1:
 					this._scheme = str;
@@ -633,6 +650,9 @@ export class BHttpStreamDecoder {
 		if (!this._knownSectionLenRead) {
 			const sectionLen = this._peekVli();
 			if (sectionLen === undefined) return undefined;
+			if (sectionLen !== 0 && this._bodylessRequest) {
+				throw new InvalidMessageError("GET and HEAD requests cannot have content");
+			}
 			this._knownSectionLen = sectionLen;
 			this._offset = this._vli.p;
 			this._knownSectionEnd = this._offset + this._knownSectionLen;
@@ -676,6 +696,9 @@ export class BHttpStreamDecoder {
 				return null;
 			}
 
+			if (this._bodylessRequest) {
+				throw new InvalidMessageError("GET and HEAD requests cannot have content");
+			}
 			this._contentStarted = true;
 			this._contentRemaining = chunkLen;
 			this._offset = this._vli.p;

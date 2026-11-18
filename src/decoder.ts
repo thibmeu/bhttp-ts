@@ -3,21 +3,18 @@ import * as errors from "./errors";
 import {
 	BHttpStreamDecoder,
 	type BHttpStreamDecoderOptions,
+	createFetchRequestStreamDecoder,
 	decodeByteString,
 	FieldSection,
+	isBodylessRequest,
 	metadataSizeLimit,
 } from "./stream-decoder";
 
 const EMPTY_CONTENT = new Uint8Array(0);
 
-function isBodylessRequest(method: string): boolean {
-	const upper = method.toUpperCase();
-	return upper === "GET" || upper === "HEAD";
-}
-
 function requestUrl(scheme: string, authority: string, path: string, headers: Headers): string {
-	if (!/^https?$/i.test(scheme)) {
-		throw new errors.InvalidMessageError("Request scheme must be http or https");
+	if (!/^[a-z][a-z0-9+.-]*$/i.test(scheme)) {
+		throw new errors.InvalidMessageError("Invalid scheme");
 	}
 	if (!path.startsWith("/")) {
 		throw new errors.InvalidMessageError("Invalid path");
@@ -134,9 +131,8 @@ export class BHttpDecoder {
 			if (bodyless) {
 				const reader = decoded.body.getReader();
 				try {
-					if (!(await reader.read()).done) {
-						throw new errors.InvalidMessageError("GET and HEAD requests cannot have content");
-					}
+					// The parser rejects nonempty content. Reading through EOF validates trailers and padding.
+					await reader.read();
 				} finally {
 					reader.releaseLock();
 				}
@@ -385,7 +381,8 @@ async function decodeStream(
 	kind: "request" | "response",
 	options: BHttpStreamDecoderOptions,
 ): Promise<DecodedRequestStream | DecodedResponseStream> {
-	const decoder = new BHttpStreamDecoder(options);
+	const decoder =
+		kind === "request" ? createFetchRequestStreamDecoder(options) : new BHttpStreamDecoder(options);
 	const reader = src.getReader();
 	let preamble: RequestStreamPreamble | ResponseStreamPreamble | undefined;
 	const pending: Uint8Array[] = [];
