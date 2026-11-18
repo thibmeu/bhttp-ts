@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { BHttpDecoder } from "../src/decoder";
 import { BHttpEncoder } from "../src/encoder";
-import { InvalidMessageError } from "../src/errors";
+import { InvalidMessageError, MetadataLimitExceededError } from "../src/errors";
 import {
 	type BHttpContentEvent,
 	type BHttpEvent,
@@ -21,7 +21,13 @@ describe("BHttpStreamDecoder", () => {
 				headers: { "x-long": value },
 			}),
 		);
-		expect(new BHttpDecoder().decodeResponse(bytes).headers.get("x-long")).toBe(value);
+		const maxMetadataSize = bytes.byteLength;
+		if (length > 64 * 1024) {
+			expect(() => new BHttpDecoder().decodeResponse(bytes)).toThrow(MetadataLimitExceededError);
+		}
+		expect(new BHttpDecoder({ maxMetadataSize }).decodeResponse(bytes).headers.get("x-long")).toBe(
+			value,
+		);
 		const decoder = new BHttpStreamDecoder({ maxMetadataSize: bytes.length });
 		const event = decoder.push(bytes).find((event) => event.type === "response-preamble");
 		expect(event?.headers.get("x-long")).toBe(value);
@@ -29,6 +35,20 @@ describe("BHttpStreamDecoder", () => {
 	});
 
 	describe("maxMetadataSize", () => {
+		it("stream decoding keeps the constructor limit when options omit it", async () => {
+			const bytes = await new BHttpEncoder().encodeResponse(
+				new Response(null, { headers: { x: "y".repeat(200) } }),
+			);
+			const decoder = new BHttpDecoder({ maxMetadataSize: 100 });
+			const stream = () => new Blob([bytes]).stream();
+			await expect(decoder.decodeResponseStream(stream(), {})).rejects.toThrow(
+				MetadataLimitExceededError,
+			);
+			await expect(
+				decoder.decodeResponseStream(stream(), { maxMetadataSize: 1024 }),
+			).resolves.toBeInstanceOf(Response);
+		});
+
 		it("rejects an oversized request control string from its length prefix", () => {
 			const decoder = new BHttpStreamDecoder({ maxMetadataSize: 16 });
 			const prefix = new Uint8Array([2, ...encodeVli(1024)]);
@@ -138,7 +158,15 @@ describe("BHttpStreamDecoder", () => {
 				"end",
 			]);
 
-			const limited = new BHttpStreamDecoder({ maxMetadataSize: metadataSize - 1 });
+			expect(new BHttpDecoder({ maxMetadataSize: metadataSize }).decodeResponse(bytes).status).toBe(
+				200,
+			);
+			const limitedOptions = { maxMetadataSize: metadataSize - 1 };
+			expect(() => new BHttpDecoder(limitedOptions).decodeResponse(bytes)).toThrow(
+				MetadataLimitExceededError,
+			);
+
+			const limited = new BHttpStreamDecoder(limitedOptions);
 			expect(() => {
 				for (const byte of bytes) limited.push(new Uint8Array([byte]));
 			}).toThrow("metadata exceeds the configured limit");

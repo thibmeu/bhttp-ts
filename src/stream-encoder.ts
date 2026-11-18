@@ -245,10 +245,9 @@ export class BHttpResponseStreamEncoder {
 		if (this._preambleEncoded) {
 			throw new Error("Preamble already encoded");
 		}
-		if (status < 200 || status >= 600) {
+		if (!Number.isInteger(status) || status < 200 || status >= 600) {
 			throw new Error("Final status must be 200-599");
 		}
-		this._preambleEncoded = true;
 
 		const parts: Uint8Array[] = [];
 
@@ -258,7 +257,7 @@ export class BHttpResponseStreamEncoder {
 		// Informational responses (1xx)
 		if (informationalResponses) {
 			for (const ir of informationalResponses) {
-				if (ir.status < 100 || ir.status >= 200) {
+				if (!Number.isInteger(ir.status) || ir.status < 100 || ir.status >= 200) {
 					throw new Error("Informational status must be 100-199");
 				}
 				parts.push(encodeVli(ir.status));
@@ -281,6 +280,7 @@ export class BHttpResponseStreamEncoder {
 			offset += part.length;
 		}
 
+		this._preambleEncoded = true;
 		return result;
 	}
 
