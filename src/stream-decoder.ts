@@ -17,6 +17,18 @@ const FRAMING_REQUEST_INDETERMINATE = 2;
 const FRAMING_RESPONSE_INDETERMINATE = 3;
 
 const textDecoder = new TextDecoder();
+const fetchMessage = Symbol("Fetch message decoding");
+
+export const BODYLESS_REQUEST_ERROR = "GET and HEAD requests cannot have content";
+export const BODYLESS_RESPONSE_ERROR = "204, 205, and 304 responses cannot have content";
+
+export function isBodylessRequest(method: string): boolean {
+	return /^(?:GET|HEAD)$/i.test(method);
+}
+
+export function isBodylessResponse(status: number): boolean {
+	return status === 204 || status === 205 || status === 304;
+}
 
 export function decodeByteString(bytes: Uint8Array): string {
 	// Convert bytes in bounded calls to stay below engine argument limits.
@@ -28,13 +40,43 @@ export function decodeByteString(bytes: Uint8Array): string {
 	return value;
 }
 
-/** Append a field using the Cookie separator required by RFC 9292. */
-export function appendField(headers: Headers, name: string, value: string): void {
-	if (name.length === 6 && name.toLowerCase() === "cookie" && headers.has(name)) {
-		const normalized = new Headers([[name, value]]).get(name) ?? "";
-		headers.set(name, `${headers.get(name)}; ${normalized}`);
-	} else {
-		headers.append(name, value);
+/** Collect split Cookie fields for the RFC 9292 "; " join. */
+export class FieldSection {
+	private readonly headers = new Headers();
+	private cookies: string[] | undefined;
+
+	append(name: string, value: string): void {
+		if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) {
+			throw new InvalidMessageError("Invalid field name");
+		}
+		if (value.includes("\0") || value.includes("\r") || value.includes("\n")) {
+			throw new InvalidMessageError("Invalid field value");
+		}
+		try {
+			if (name.length === 6 && name.toLowerCase() === "cookie") {
+				// Match Fetch's normalization for each field before combining them.
+				value = value.replace(/^[ \t]+|(?<![ \t])[ \t]+$/g, "");
+				this.cookies ??= [];
+				this.cookies.push(value);
+			} else {
+				this.headers.append(name, value);
+			}
+		} catch (cause) {
+			if (!(cause instanceof TypeError)) throw cause;
+			throw new InvalidMessageError("Invalid field name or value", { cause });
+		}
+	}
+
+	get empty(): boolean {
+		return this.cookies === undefined && this.headers.keys().next().done === true;
+	}
+
+	finish(): Headers {
+		if (this.cookies !== undefined) {
+			this.headers.append("cookie", this.cookies.join("; "));
+			this.cookies = undefined;
+		}
+		return this.headers;
 	}
 }
 
@@ -52,6 +94,19 @@ export interface BHttpStreamDecoderOptions {
 	 * @default 65536
 	 */
 	readonly maxMetadataSize?: number;
+}
+
+export function metadataSizeLimit(options: BHttpStreamDecoderOptions): number {
+	const limit = options.maxMetadataSize ?? DEFAULT_MAX_METADATA_SIZE;
+	if (!Number.isSafeInteger(limit) || limit < 0) {
+		throw new RangeError(`maxMetadataSize must be a non-negative integer, got ${limit}`);
+	}
+	return limit;
+}
+
+export function createFetchStreamDecoder(options: BHttpStreamDecoderOptions): BHttpStreamDecoder {
+	const fetchOptions = { ...options, [fetchMessage]: true };
+	return new BHttpStreamDecoder(fetchOptions);
 }
 
 /**
@@ -141,13 +196,18 @@ type DecoderPhase =
  * ```
  */
 export class BHttpStreamDecoder {
-	private _buffer: Uint8Array = new Uint8Array(0);
+	private _buffer: Uint8Array = EMPTY;
+	// Spare capacity for input that has not been exposed in a content event.
+	private _ownedBuffer: Uint8Array | undefined;
 	private _offset = 0;
 	private _phase: DecoderPhase = "framing";
 
 	// Message type determined from framing indicator
 	private _isRequest = false;
 	private _isKnownLength = false;
+
+	private readonly _fetchMessage: boolean;
+	private _contentError: string | undefined;
 
 	// Request control data (accumulated across calls)
 	private _method = "";
@@ -172,7 +232,7 @@ export class BHttpStreamDecoder {
 	private _contentStarted = false;
 
 	// Accumulated headers/trailers
-	private _headers = new Headers();
+	private _fields = new FieldSection();
 	// A consumed name stays pending until its value arrives; completed fields are never reparsed.
 	private _pendingHeaderName: string | null = null;
 	private readonly _maxMetadataSize: number;
@@ -180,13 +240,8 @@ export class BHttpStreamDecoder {
 	private _metadataBytes = 0;
 
 	constructor(options: BHttpStreamDecoderOptions = {}) {
-		const maxMetadataSize = options.maxMetadataSize ?? DEFAULT_MAX_METADATA_SIZE;
-		if (!Number.isSafeInteger(maxMetadataSize) || maxMetadataSize < 0) {
-			throw new RangeError(
-				`maxMetadataSize must be a non-negative integer, got ${maxMetadataSize}`,
-			);
-		}
-		this._maxMetadataSize = maxMetadataSize;
+		this._maxMetadataSize = metadataSizeLimit(options);
+		this._fetchMessage = fetchMessage in options;
 	}
 
 	private _chargeMetadata(bytes: number): void {
@@ -216,29 +271,7 @@ export class BHttpStreamDecoder {
 			throw new Error("Decoder already finished");
 		}
 
-		if (data.length > 0) {
-			const remaining = this._buffer.length - this._offset;
-			// Rebase persisted absolute offsets by the dropped prefix. _offset and
-			// _knownSectionEnd are the only positions that survive across pushes;
-			// _knownSectionEnd is stale (and recomputed) while _knownSectionLenRead
-			// is false, so rebasing it unconditionally is safe.
-			this._knownSectionEnd -= this._offset;
-			if (remaining === 0) {
-				// Previous buffer fully consumed (the common case when pushes keep
-				// pace with parsing): adopt the incoming buffer without copying.
-				this._buffer = data;
-			} else {
-				// A field spans pushes: copy the unconsumed remainder + new data.
-				// Dropping the consumed prefix keeps each copy proportional to the
-				// remainder; carrying it forward would make chunked decode O(n^2)
-				// in the number of pushes.
-				const newBuf = new Uint8Array(remaining + data.length);
-				newBuf.set(this._buffer.subarray(this._offset), 0);
-				newBuf.set(data, remaining);
-				this._buffer = newBuf;
-			}
-			this._offset = 0;
-		}
+		if (data.length > 0) this._appendInput(data);
 
 		const events: BHttpEvent[] = [];
 
@@ -256,6 +289,33 @@ export class BHttpStreamDecoder {
 
 		this._discardPadding();
 		return events;
+	}
+
+	private _appendInput(data: Uint8Array): void {
+		const remaining = this._buffer.length - this._offset;
+		const newEnd = this._buffer.length + data.length;
+		const owned = this._ownedBuffer;
+		if (remaining > 0 && owned !== undefined && newEnd <= owned.length) {
+			owned.set(data, this._buffer.length);
+			this._buffer = owned.subarray(0, newEnd);
+			return;
+		}
+
+		// Drop the consumed prefix and rebase the active known-length boundary.
+		this._knownSectionEnd -= this._offset;
+		if (remaining === 0) {
+			this._buffer = data;
+			this._ownedBuffer = undefined;
+		} else {
+			// Grow geometrically when metadata spans multiple pushes.
+			const size = remaining + data.length;
+			const buffer = new Uint8Array(Math.max(size, remaining * 2));
+			buffer.set(this._buffer.subarray(this._offset));
+			buffer.set(data, remaining);
+			this._buffer = buffer.subarray(0, size);
+			this._ownedBuffer = buffer;
+		}
+		this._offset = 0;
 	}
 
 	/**
@@ -280,7 +340,7 @@ export class BHttpStreamDecoder {
 			(this._phase === "content-indeterminate" && !this._contentStarted) ||
 			(this._phase === "trailers-indeterminate" &&
 				this._pendingHeaderName === null &&
-				this._headers.keys().next().done);
+				this._fields.empty);
 		const atKnownBoundary =
 			(this._phase === "content-known" || this._phase === "trailers-known") &&
 			!this._knownSectionLenRead;
@@ -305,6 +365,8 @@ export class BHttpStreamDecoder {
 			}
 		}
 		this._buffer = EMPTY;
+		this._ownedBuffer = undefined;
+		this._vli.buf = EMPTY;
 		this._offset = 0;
 	}
 
@@ -406,6 +468,9 @@ export class BHttpStreamDecoder {
 			switch (this._controlStep) {
 				case 0:
 					this._method = str;
+					if (this._fetchMessage && isBodylessRequest(str)) {
+						this._contentError = BODYLESS_REQUEST_ERROR;
+					}
 					break;
 				case 1:
 					this._scheme = str;
@@ -421,7 +486,6 @@ export class BHttpStreamDecoder {
 		}
 
 		// Move to headers
-		this._headers = new Headers();
 		this._phase = this._isKnownLength ? "headers-known" : "headers-indeterminate";
 		return null;
 	}
@@ -443,7 +507,6 @@ export class BHttpStreamDecoder {
 		if (status >= 100 && status < 200) {
 			if (this._informationalStatus === null) {
 				this._informationalStatus = status;
-				this._headers = new Headers();
 			}
 
 			// Try to parse headers for informational response
@@ -458,9 +521,9 @@ export class BHttpStreamDecoder {
 			const event: BHttpInformationalEvent = {
 				type: "informational",
 				status,
-				headers: this._headers,
+				headers: this._fields.finish(),
 			};
-			this._headers = new Headers();
+			this._fields = new FieldSection();
 			this._knownSectionLenRead = false;
 			this._informationalStatus = null;
 			return event;
@@ -472,7 +535,9 @@ export class BHttpStreamDecoder {
 		}
 
 		this._status = status;
-		this._headers = new Headers();
+		if (this._fetchMessage && isBodylessResponse(status)) {
+			this._contentError = BODYLESS_RESPONSE_ERROR;
+		}
 		this._phase = this._isKnownLength ? "headers-known" : "headers-indeterminate";
 
 		return null;
@@ -485,12 +550,10 @@ export class BHttpStreamDecoder {
 		| undefined {
 		const saveOffset = this._offset;
 		const saveMetadataBytes = this._metadataBytes;
-		const saveHeaders = new Headers(this._headers);
 
 		const complete = this._tryParseKnownLengthHeaders();
 		if (!complete) {
 			this._offset = saveOffset;
-			this._headers = saveHeaders;
 			this._knownSectionLenRead = false;
 			this._metadataBytes = saveMetadataBytes;
 			return undefined;
@@ -543,20 +606,13 @@ export class BHttpStreamDecoder {
 			const value = this._tryDecodeVliString(false, true);
 			if (value === undefined) return false;
 
-			if (
-				this._isRequest &&
-				name.localeCompare("host", undefined, { sensitivity: "accent" }) === 0 &&
-				this._authority === ""
-			) {
-				this._authority = value;
-			}
-			appendField(this._headers, name, value);
+			this._fields.append(name, value);
 		}
 
 		return true;
 	}
 
-	private _tryParseIndeterminateLengthHeaders(setAuthority = true): boolean {
+	private _tryParseIndeterminateLengthHeaders(): boolean {
 		// Headers terminated by Name Length = 0
 		while (true) {
 			// If we have a pending header name, try to get value
@@ -564,16 +620,7 @@ export class BHttpStreamDecoder {
 				const value = this._tryDecodeVliString(true, true);
 				if (value === undefined) return false;
 
-				if (
-					setAuthority &&
-					this._isRequest &&
-					this._pendingHeaderName.localeCompare("host", undefined, { sensitivity: "accent" }) ===
-						0 &&
-					this._authority === ""
-				) {
-					this._authority = value;
-				}
-				appendField(this._headers, this._pendingHeaderName, value);
+				this._fields.append(this._pendingHeaderName, value);
 				this._pendingHeaderName = null;
 				continue;
 			}
@@ -599,6 +646,7 @@ export class BHttpStreamDecoder {
 	}
 
 	private _emitPreambleEvent(): BHttpRequestPreambleEvent | BHttpResponsePreambleEvent {
+		const headers = this._fields.finish();
 		if (this._isRequest) {
 			return {
 				type: "request-preamble",
@@ -606,13 +654,13 @@ export class BHttpStreamDecoder {
 				scheme: this._scheme,
 				authority: this._authority,
 				path: this._path,
-				headers: this._headers,
+				headers,
 			};
 		}
 		return {
 			type: "response-preamble",
 			status: this._status,
-			headers: this._headers,
+			headers,
 		};
 	}
 
@@ -621,6 +669,9 @@ export class BHttpStreamDecoder {
 		if (!this._knownSectionLenRead) {
 			const sectionLen = this._peekVli();
 			if (sectionLen === undefined) return undefined;
+			if (sectionLen !== 0 && this._contentError !== undefined) {
+				throw new InvalidMessageError(this._contentError);
+			}
 			this._knownSectionLen = sectionLen;
 			this._offset = this._vli.p;
 			this._knownSectionEnd = this._offset + this._knownSectionLen;
@@ -633,14 +684,13 @@ export class BHttpStreamDecoder {
 			}
 		}
 
-		// Emit whatever content bytes have arrived (a view, not a copy; see
-		// push()). Waiting for the whole section would re-copy the growing
-		// remainder on every push: O(n^2) for sections larger than the pushes.
+		// Emit available content without waiting for the rest of the section.
 		const end = Math.min(this._buffer.length, this._knownSectionEnd);
 		if (end <= this._offset) {
 			return undefined;
 		}
 		const data = this._buffer.subarray(this._offset, end);
+		this._ownedBuffer = undefined;
 		this._offset = end;
 		if (this._offset === this._knownSectionEnd) {
 			this._phase = "trailers-known";
@@ -659,24 +709,26 @@ export class BHttpStreamDecoder {
 				// Terminator - move to trailers
 				this._offset = this._vli.p;
 				this._phase = "trailers-indeterminate";
-				this._headers = new Headers();
+				this._fields = new FieldSection();
 				this._pendingHeaderName = null;
 				return null;
 			}
 
+			if (this._contentError !== undefined) {
+				throw new InvalidMessageError(this._contentError);
+			}
 			this._contentStarted = true;
 			this._contentRemaining = chunkLen;
 			this._offset = this._vli.p;
 		}
 
-		// Emit whatever bytes of the chunk have arrived (a view, not a copy; see
-		// push()). Waiting for the whole chunk would re-copy the growing
-		// remainder on every push: O(n^2) for chunks larger than the pushes.
+		// Emit available content without waiting for the rest of the chunk.
 		const take = Math.min(this._buffer.length - this._offset, this._contentRemaining);
 		if (take === 0) {
 			return undefined;
 		}
 		const data = this._buffer.subarray(this._offset, this._offset + take);
+		this._ownedBuffer = undefined;
 		this._offset += take;
 		this._contentRemaining -= take;
 
@@ -714,7 +766,7 @@ export class BHttpStreamDecoder {
 		}
 
 		// Parse trailers
-		const trailers = new Headers();
+		const trailers = new FieldSection();
 		while (this._offset < this._knownSectionEnd) {
 			const name = this._tryDecodeVliString(false, true);
 			if (name === undefined) {
@@ -728,25 +780,25 @@ export class BHttpStreamDecoder {
 				this._knownSectionLenRead = false;
 				return undefined;
 			}
-			appendField(trailers, name, value);
+			trailers.append(name, value);
 		}
 
 		this._phase = "padding";
 		this._knownSectionLenRead = false;
-		return { type: "trailers", headers: trailers };
+		return { type: "trailers", headers: trailers.finish() };
 	}
 
 	private _processTrailersIndeterminate(): BHttpTrailersEvent | null | undefined {
-		if (!this._tryParseIndeterminateLengthHeaders(false)) return undefined;
+		if (!this._tryParseIndeterminateLengthHeaders()) return undefined;
 
 		this._phase = "padding";
 
 		// Only emit trailers event if there are any
-		if (this._headers.keys().next().done) {
+		if (this._fields.empty) {
 			return null;
 		}
 
-		return { type: "trailers", headers: this._headers };
+		return { type: "trailers", headers: this._fields.finish() };
 	}
 
 	/**

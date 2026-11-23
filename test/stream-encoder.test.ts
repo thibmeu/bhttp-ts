@@ -243,12 +243,21 @@ describe("BHttpResponseStreamEncoder", () => {
 		expect(response.status).toBe(200);
 	});
 
-	it("throws on invalid final status", () => {
+	it.each([100, NaN, 200.5])("throws on invalid final status %s", (status) => {
 		const encoder = new BHttpResponseStreamEncoder();
 
-		expect(() => encoder.encodePreamble(100, new Headers())).toThrow(
+		expect(() => encoder.encodePreamble(status, new Headers())).toThrow(
 			"Final status must be 200-599",
 		);
+	});
+
+	it("rejects an invalid informational status before committing the preamble", () => {
+		const encoder = new BHttpResponseStreamEncoder();
+		const headers = new Headers();
+		expect(() => encoder.encodePreamble(200, headers, [{ status: NaN, headers }])).toThrow(
+			"Informational status must be 100-199",
+		);
+		expect(encoder.encodePreamble(200, headers)).toEqual(Uint8Array.of(3, 0x40, 200, 0));
 	});
 
 	it("encodes header values as opaque octets", () => {
