@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { BHttpDecoder } from "../src/decoder";
 import { BHttpEncoder } from "../src/encoder";
-import { InvalidMessageError } from "../src/errors";
+import { InvalidMessageError, MetadataLimitExceededError } from "../src/errors";
 import {
 	type BHttpContentEvent,
 	type BHttpEvent,
@@ -21,7 +21,13 @@ describe("BHttpStreamDecoder", () => {
 				headers: { "x-long": value },
 			}),
 		);
-		expect(new BHttpDecoder().decodeResponse(bytes).headers.get("x-long")).toBe(value);
+		const maxMetadataSize = bytes.byteLength;
+		if (length > 64 * 1024) {
+			expect(() => new BHttpDecoder().decodeResponse(bytes)).toThrow(MetadataLimitExceededError);
+		}
+		expect(new BHttpDecoder({ maxMetadataSize }).decodeResponse(bytes).headers.get("x-long")).toBe(
+			value,
+		);
 		const decoder = new BHttpStreamDecoder({ maxMetadataSize: bytes.length });
 		const event = decoder.push(bytes).find((event) => event.type === "response-preamble");
 		expect(event?.headers.get("x-long")).toBe(value);
@@ -29,6 +35,20 @@ describe("BHttpStreamDecoder", () => {
 	});
 
 	describe("maxMetadataSize", () => {
+		it("stream decoding keeps the constructor limit when options omit it", async () => {
+			const bytes = await new BHttpEncoder().encodeResponse(
+				new Response(null, { headers: { x: "y".repeat(200) } }),
+			);
+			const decoder = new BHttpDecoder({ maxMetadataSize: 100 });
+			const stream = () => new Blob([bytes]).stream();
+			await expect(decoder.decodeResponseStream(stream(), {})).rejects.toThrow(
+				MetadataLimitExceededError,
+			);
+			await expect(
+				decoder.decodeResponseStream(stream(), { maxMetadataSize: 1024 }),
+			).resolves.toBeInstanceOf(Response);
+		});
+
 		it("rejects an oversized request control string from its length prefix", () => {
 			const decoder = new BHttpStreamDecoder({ maxMetadataSize: 16 });
 			const prefix = new Uint8Array([2, ...encodeVli(1024)]);
@@ -138,7 +158,15 @@ describe("BHttpStreamDecoder", () => {
 				"end",
 			]);
 
-			const limited = new BHttpStreamDecoder({ maxMetadataSize: metadataSize - 1 });
+			expect(new BHttpDecoder({ maxMetadataSize: metadataSize }).decodeResponse(bytes).status).toBe(
+				200,
+			);
+			const limitedOptions = { maxMetadataSize: metadataSize - 1 };
+			expect(() => new BHttpDecoder(limitedOptions).decodeResponse(bytes)).toThrow(
+				MetadataLimitExceededError,
+			);
+
+			const limited = new BHttpStreamDecoder(limitedOptions);
 			expect(() => {
 				for (const byte of bytes) limited.push(new Uint8Array([byte]));
 			}).toThrow("metadata exceeds the configured limit");
@@ -686,6 +714,39 @@ describe("repeated fields and bodyless responses", () => {
 		const v = new TextEncoder().encode(value);
 		return [...encodeVli(n.length), ...n, ...encodeVli(v.length), ...v];
 	};
+	it.each([
+		[1, "x-test", "\rvalue"],
+		[3, "x-test", "value\n"],
+		[3, "cookie", "key=value\r"],
+		[1, "cookie", "key=\0value"],
+	])("rejects raw control bytes in framing %i field %s", (framing, name, value) => {
+		const fields = field(name, value);
+		const section = framing === 1 ? [...encodeVli(fields.length), ...fields] : [...fields, 0];
+		const bytes = Uint8Array.of(framing, ...encodeVli(200), ...section);
+		expect(() => new BHttpDecoder().decodeResponse(bytes)).toThrow("Invalid field value");
+		expect(() => new BHttpStreamDecoder().push(bytes)).toThrow("Invalid field value");
+	});
+
+	it.each([1, 3])(
+		"preserves a large field across repeated small pushes in framing %i",
+		(framing) => {
+			const value = "x".repeat(16 * 1024);
+			const fields = field("x-large", value);
+			const section = framing === 1 ? [...encodeVli(fields.length), ...fields] : [...fields, 0];
+			const bytes = Uint8Array.of(framing, ...encodeVli(200), ...section, 1, 97, 0, 0);
+			const decoder = new BHttpStreamDecoder();
+			const events: BHttpEvent[] = [];
+			for (let offset = 0; offset < bytes.length; offset += 97) {
+				events.push(...decoder.push(bytes.subarray(offset, offset + 97)));
+			}
+			events.push(...decoder.end());
+			const preamble = events.find((event) => event.type === "response-preamble");
+			expect(preamble?.headers.get("x-large")).toBe(value);
+			expect(events).toContainEqual({ type: "content", data: Uint8Array.of(97) });
+			expect(events.at(-1)).toEqual({ type: "end" });
+		},
+	);
+
 	it.each([1, 3])("preserves repeated fields with framing %i at every split", async (framing) => {
 		const fields = [
 			...field("set-cookie", "a=1"),

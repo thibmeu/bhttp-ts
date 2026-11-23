@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { BHttpDecoder } from "../src/decoder";
 import { BHttpEncoder } from "../src/encoder";
-import { MessageLimitExceededError } from "../src/errors";
+import { InvalidMessageError, MessageLimitExceededError, NotSupportedError } from "../src/errors";
+import { BHttpStreamDecoder } from "../src/stream-decoder";
 import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "../src/stream-encoder";
+import { encodeVli } from "../src/vli";
 
 import { collectBytes } from "./utils";
 
@@ -30,6 +32,37 @@ describe("Fetch streaming API", () => {
 		expect(decoded.headers.get("x-test")).toBe("stream");
 		expect(await decoded.text()).toBe("hello");
 	});
+
+	it("should round-trip a request with a non-HTTP URI scheme in both framings", async () => {
+		const request = new Request("web+demo://example.com/path?q=1");
+		const encoder = new BHttpEncoder();
+		const decoder = new BHttpDecoder();
+
+		expect(decoder.decodeRequest(await encoder.encodeRequest(request)).url).toBe(request.url);
+		const streamed = await decoder.decodeRequestStream(encoder.encodeRequestStream(request));
+		expect(streamed.url).toBe(request.url);
+	});
+
+	it.each([
+		["http", "example.com", "EXAMPLE.COM:80"],
+		["web+demo", "Example.com:8080", "example.com:8080"],
+	])("accepts an equivalent Host for %s requests", async (scheme, authority, host) => {
+		const bytes = requestPreamble("GET", scheme, authority, host);
+		const expected = `${scheme}://${authority}/`;
+		const decoder = new BHttpDecoder();
+		expect(decoder.decodeRequest(bytes).url).toBe(expected);
+		expect((await decoder.decodeRequestStream(streamOf(bytes))).url).toBe(expected);
+	});
+
+	it.each(["file:///tmp/example.txt", "web+demo:/path", "web+demo://example.com"])(
+		"rejects unsupported Fetch request targets during encoding (%s)",
+		async (url) => {
+			const encoder = new BHttpEncoder();
+			const request = new Request(url);
+			await expect(encoder.encodeRequest(request)).rejects.toThrow(NotSupportedError);
+			expect(() => encoder.encodeRequestStream(request)).toThrow(NotSupportedError);
+		},
+	);
 
 	it("should round-trip a streaming Response", async () => {
 		// Arrange
@@ -149,20 +182,121 @@ describe("Fetch streaming API", () => {
 	});
 
 	it.each([
-		["CONNECT request", () => requestPreamble("CONNECT")],
-		["invalid response status", invalidResponsePreamble],
-	])("should cancel the input when constructing an %s fails", async (name, preamble) => {
-		// Arrange
-		const source = bodylessMessage(preamble());
+		[204, 1],
+		[205, 3],
+		[304, 1],
+		[304, 3],
+	])(
+		"rejects content on a %i response in framing %i at its length prefix",
+		async (status, framing) => {
+			const preamble = responsePreamble(status);
+			preamble[0] = framing;
+			const bytes = Uint8Array.of(...preamble, 1, 120, 0, 0);
+			const decoder = new BHttpDecoder();
+			const error = "204, 205, and 304 responses cannot have content";
+			expect(() => decoder.decodeResponse(bytes)).toThrow(error);
+			const raw = new BHttpStreamDecoder();
+			expect(raw.push(bytes)).toContainEqual({ type: "content", data: Uint8Array.of(120) });
+			raw.end();
+			const source = bodylessMessage(bytes.subarray(0, preamble.length + 1));
+			await expect(decoder.decodeResponseStream(source.stream)).rejects.toThrow(error);
+			expect(source.cancelled).toBe(true);
+			expect(source.stream.locked).toBe(false);
+		},
+	);
 
-		// Act / Assert
+	it.each([
+		["CONNECT request", () => requestPreamble("CONNECT")],
+		["invalid scheme request", () => requestPreamble("GET", "1https")],
+		["invalid authority request", () => requestPreamble("GET", "https", ":80")],
+		["mismatched Host request", () => requestPreamble("GET", "https", "example.com", "other.test")],
+		[
+			"invalid header name request",
+			() =>
+				Uint8Array.of(
+					...requestPreamble("GET").subarray(0, -1),
+					5,
+					104,
+					111,
+					0xad,
+					115,
+					116,
+					1,
+					120,
+					0,
+				),
+		],
+		["invalid response status", invalidResponsePreamble],
+	])("should classify and cancel invalid input for a %s", async (name, preamble) => {
+		const bytes = preamble();
+		const source = bodylessMessage(bytes);
+		const decoder = new BHttpDecoder();
 		if (name.endsWith("request")) {
-			await expect(new BHttpDecoder().decodeRequestStream(source.stream)).rejects.toThrow();
+			expect(() => decoder.decodeRequest(bytes)).toThrow(InvalidMessageError);
+			await expect(decoder.decodeRequestStream(source.stream)).rejects.toThrow(InvalidMessageError);
 		} else {
-			await expect(new BHttpDecoder().decodeResponseStream(source.stream)).rejects.toThrow();
+			await expect(decoder.decodeResponseStream(source.stream)).rejects.toThrow(
+				InvalidMessageError,
+			);
 		}
 		expect(source.cancelled).toBe(true);
 		expect(source.stream.locked).toBe(false);
+	});
+
+	it("should reject GET content and cancel when the first content chunk is already available", async () => {
+		const encoder = new BHttpRequestStreamEncoder();
+		const preamble = encoder.encodePreamble("GET", "https", "example.com", "/", new Headers());
+		const source = framedBody(preamble, encoder, 100);
+		const decoder = new BHttpDecoder();
+
+		// The same preamble works with either framing because the field section is empty.
+		for (const framing of [0, 2]) {
+			const bytes = Uint8Array.of(framing, ...preamble.subarray(1), 1, 120, 0, 0);
+			expect(() => decoder.decodeRequest(bytes)).toThrow(
+				"GET and HEAD requests cannot have content",
+			);
+			expect(new BHttpStreamDecoder().push(bytes)).toContainEqual({
+				type: "content",
+				data: Uint8Array.of(120),
+			});
+		}
+		await expect(decoder.decodeRequestStream(source.stream)).rejects.toThrow(InvalidMessageError);
+		expect(source.cancelled).toBe(true);
+		expect(source.stream.locked).toBe(false);
+		expect(source.pulls).toBeLessThanOrEqual(3);
+	});
+
+	it.each([
+		["GET", 0],
+		["head", 0],
+		["get", 2],
+		["HEAD", 2],
+	])("rejects %s content as soon as its length arrives in framing %i", async (method, framing) => {
+		const preamble = requestPreamble(method);
+		// An empty header section is encoded as zero in both framings.
+		preamble[0] = framing;
+		const contentLength = encodeVli(64);
+		const chunks = [preamble, contentLength.subarray(0, 1), contentLength.subarray(1)];
+		let cancelled = false;
+		const stream = new ReadableStream<Uint8Array>(
+			{
+				pull(controller) {
+					const chunk = chunks.shift();
+					if (chunk === undefined) throw new Error("Read past the content length");
+					controller.enqueue(chunk);
+				},
+				cancel() {
+					cancelled = true;
+				},
+			},
+			{ highWaterMark: 0 },
+		);
+
+		await expect(new BHttpDecoder().decodeRequestStream(stream)).rejects.toThrow(
+			"GET and HEAD requests cannot have content",
+		);
+		expect(cancelled).toBe(true);
+		expect(stream.locked).toBe(false);
 	});
 
 	it("should reject a response when a request is expected", async () => {
@@ -268,13 +402,18 @@ function framedBody(preamble: Uint8Array, encoder: BHttpRequestStreamEncoder, to
 	};
 }
 
-function requestPreamble(method: string): Uint8Array {
+function requestPreamble(
+	method: string,
+	scheme = "https",
+	authority = "example.com",
+	host?: string,
+): Uint8Array {
 	return new BHttpRequestStreamEncoder().encodePreamble(
 		method,
-		"https",
-		"example.com",
+		scheme,
+		authority,
 		"/",
-		new Headers(),
+		new Headers(host === undefined ? {} : { host }),
 	);
 }
 

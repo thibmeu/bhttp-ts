@@ -116,8 +116,8 @@ const decoded = await decoder.decodeRequestStream(encoded);
 ```
 
 Response equivalents are `encodeResponseStream` and `decodeResponseStream`.
-For GET/HEAD requests and 204/205/304 responses, decoding consumes and validates
-the complete input through EOF before resolving, while discarding content.
+For GET/HEAD requests and 204/205/304 responses, decoding rejects nonempty
+content and validates the complete input through EOF before resolving.
 Other messages finish validation when their decoded body is consumed to EOF.
 The existing `BHttpRequestStreamEncoder`, `BHttpResponseStreamEncoder`, and
 `BHttpStreamDecoder` remain available when manual framing is required.
@@ -161,6 +161,18 @@ Set an explicit encoded-size limit, for example `{ padding: 1024, maxMessageSize
 - `decodeResponse(data: ArrayBuffer | Uint8Array): Response` - Decode BHTTP to a Response
 - `decodeRequestStream(stream: ReadableStream<Uint8Array>): Promise<Request>` - Decode a streaming BHTTP request
 - `decodeResponseStream(stream: ReadableStream<Uint8Array>): Promise<Response>` - Decode a streaming BHTTP response
+
+Decoders default to a 64 KiB metadata limit per message, including control data,
+informational responses, headers, and trailers. Body and padding bytes are
+excluded. Set `new BHttpDecoder({ maxMetadataSize })` to override it.
+The Fetch request APIs support `http`, `https`, and other URI schemes the runtime
+can represent with a host and a slash-prefixed path. On decode, an empty
+authority may be supplied by the Host header. If both are present, they must
+identify the same host and port. The manual framing APIs expose request
+control data directly for other URI forms.
+
+Decoded field values reject NUL, CR, and LF. Surrounding spaces and tabs
+are normalized for compatibility with Fetch.
 
 ### BHttpRequestStreamEncoder / BHttpResponseStreamEncoder
 

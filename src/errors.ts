@@ -1,7 +1,7 @@
 /**
- * The base error class of hpke-js.
+ * Base class for BHTTP errors.
  */
-class BHttpError extends Error {}
+export class BHttpError extends Error {}
 
 /**
  * Invalid message.

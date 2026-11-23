@@ -1,5 +1,23 @@
 # Changes
 
+## Unreleased
+
+### Changed
+
+- `BHttpDecoder` now limits metadata to 64 KiB by default. Set `maxMetadataSize` to
+  change it.
+- Fetch decoding rejects content on GET and HEAD requests and on 204, 205, and 304
+  responses. It used to drop it.
+- Fetch decoding requires the Host header and request authority to match, and
+  rejects field names that aren't tokens and values containing NUL, CR, or LF.
+- Fetch encoding rejects URLs without a host or a slash-prefixed path.
+- `BHttpStreamDecoder` reports the request authority as encoded and no longer
+  fills it in from the Host header.
+
+### Fixed
+
+- A response stream encoder that throws on an invalid status can be reused.
+
 ## Version 0.6.1
 
 Released 2026-09-30

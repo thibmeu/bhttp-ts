@@ -5,6 +5,16 @@ import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "./stream-
 // Request control data uses UTF-8. Header fields use opaque ByteString octets.
 const te = new TextEncoder();
 
+function requestUrl(request: Request): URL {
+	const url = new URL(request.url);
+	if (url.host === "" || !url.pathname.startsWith("/")) {
+		throw new errors.NotSupportedError(
+			"BHTTP Fetch requests require a host and a slash-prefixed path",
+		);
+	}
+	return url;
+}
+
 function encodeByteString(value: string): Uint8Array {
 	const bytes = new Uint8Array(value.length);
 	for (let i = 0; i < value.length; i++) {
@@ -118,7 +128,7 @@ class RequestEncoderContext extends EncoderContext {
 	constructor(request: Request) {
 		super();
 		this.request = request;
-		this.url = new URL(request.url);
+		this.url = requestUrl(request);
 	}
 
 	public async setup(maxMessageSize: number, padding: Padding) {
@@ -236,7 +246,7 @@ export class BHttpEncoder {
 		src: Request,
 		options: BHttpEncoderOptions = {},
 	): ReadableStream<Uint8Array> {
-		const url = new URL(src.url);
+		const url = requestUrl(src);
 		const encoder = new BHttpRequestStreamEncoder();
 		return this.encodeStream(
 			encoder.encodePreamble(
