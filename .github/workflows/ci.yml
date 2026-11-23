@@ -35,7 +35,6 @@ jobs:
   # Benchmark the current branch, then compare against main.
   benchmark:
     runs-on: ubuntu-latest
-    needs: node
     steps:
       - uses: actions/checkout@v7
         with:
@@ -67,6 +66,9 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            samples/node/package.json
       - uses: oven-sh/setup-bun@v2
       - run: npm ci
       - run: npm run build
@@ -86,6 +88,9 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            samples/cloudflare/package.json
       - run: npm ci
       - run: npm run test:workers
       - run: npm run build
@@ -93,19 +98,22 @@ jobs:
         working-directory: samples/cloudflare
         run: |
           npm install
+          npm run typecheck
           npx vitest run
 
   # Run the suite in real Chromium and Firefox browsers via Vitest browser mode.
   browser:
     runs-on: ubuntu-latest
+    # System deps and browsers are baked into the image; installing them with
+    # apt took up to 8 minutes on slow mirrors. Keep the tag in step with the
+    # playwright devDependency (a mismatch only costs a ~10s browser download).
+    container:
+      image: mcr.microsoft.com/playwright:v1.65.1-noble
+      options: --user 1001
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
       - run: npm ci
-      - run: npx playwright install chromium firefox --with-deps
+      - run: npx playwright install chromium firefox
       - run: npm run test:browser
 
   # Run the sample on the Fastly Compute runtime (local Viceroy, no API token).
@@ -117,14 +125,19 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            samples/fastly/package.json
       - run: npm ci
       - run: npm run build
       - uses: fastly/compute-actions/setup@v14
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run sample on Fastly Compute (Viceroy)
         working-directory: samples/fastly
         run: |
           npm install
           fastly compute build
           nohup fastly compute serve --addr 127.0.0.1:7676 &
-          sleep 15
+          curl -sf --retry 60 --retry-delay 1 --retry-all-errors -o /dev/null http://127.0.0.1:7676/
           node test.mjs
