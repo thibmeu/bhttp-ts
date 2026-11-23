@@ -44,4 +44,4 @@ export default {
       );
     }
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler;

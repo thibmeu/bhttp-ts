@@ -8,7 +8,7 @@
     "start": "fastly compute serve"
   },
   "devDependencies": {
-    "@fastly/js-compute": "^3.42.1"
+    "@fastly/js-compute": "^4.3.0"
   },
   "dependencies": {
     "bhttp-ts": "file:../.."
