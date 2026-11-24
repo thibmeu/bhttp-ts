@@ -6,7 +6,14 @@ export {
 	padme,
 	padmeWithFloor,
 } from "./encoder";
-export * from "./errors";
+export {
+	BHttpError,
+	DEFAULT_MAX_METADATA_SIZE,
+	InvalidMessageError,
+	MessageLimitExceededError,
+	MetadataLimitExceededError,
+	NotSupportedError,
+} from "./errors";
 export {
 	type BHttpContentEvent,
 	type BHttpEndEvent,
@@ -17,7 +24,6 @@ export {
 	BHttpStreamDecoder,
 	type BHttpStreamDecoderOptions,
 	type BHttpTrailersEvent,
-	DEFAULT_MAX_METADATA_SIZE,
 } from "./stream-decoder";
 // Streaming API
 export {

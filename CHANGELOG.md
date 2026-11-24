@@ -1,5 +1,12 @@
 # Changes
 
+## Unreleased
+
+### Fixed
+
+- `BHttpEncoder` now enforces `maxMetadataSize` (default 64 KiB), like
+  `BHttpDecoder`. It used to encode messages that a default decoder rejects.
+
 ## Version 0.7.0
 
 Released 2026-11-23

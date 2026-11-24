@@ -2,10 +2,62 @@ import { describe, expect, it } from "vitest";
 
 import { BHttpDecoder } from "../src/decoder";
 import { BHttpEncoder, type BHttpEncoderOptions } from "../src/encoder";
-import { MessageLimitExceededError } from "../src/errors";
+import { MessageLimitExceededError, MetadataLimitExceededError } from "../src/errors";
 import { collectBytes } from "./utils";
 
 describe("BHttpEncoder", () => {
+	// A peer using the same limit must be able to decode whatever the encoder emits.
+	it.each([
+		["request", false],
+		["request", true],
+		["response", false],
+		["response", true],
+	] as const)(
+		"matches the decoder's maxMetadataSize boundary (%s, streaming: %s)",
+		async (kind, streaming) => {
+			const encoder = new BHttpEncoder();
+			const headers = { "x-a": "b" };
+			const encode = (maxMetadataSize: number) => {
+				const options = { maxMetadataSize };
+				const src =
+					kind === "request"
+						? new Request("https://example.com/", { method: "POST", headers, body: "hello" })
+						: new Response("hello", { headers });
+				if (streaming) {
+					return collectBytes(
+						src instanceof Request
+							? encoder.encodeRequestStream(src, options)
+							: encoder.encodeResponseStream(src, options),
+					);
+				}
+				return src instanceof Request
+					? encoder.encodeRequest(src, options)
+					: encoder.encodeResponse(src, options);
+			};
+			const bytes = await encode(Number.MAX_SAFE_INTEGER);
+			for (let limit = 0; limit < 128; limit++) {
+				const decoder = new BHttpDecoder({ maxMetadataSize: limit });
+				const decodes = (() => {
+					try {
+						kind === "request" ? decoder.decodeRequest(bytes) : decoder.decodeResponse(bytes);
+						return true;
+					} catch (error) {
+						expect(error).toBeInstanceOf(MetadataLimitExceededError);
+						return false;
+					}
+				})();
+				const encodes = await encode(limit).then(
+					() => true,
+					(error) => {
+						expect(error).toBeInstanceOf(MetadataLimitExceededError);
+						return false;
+					},
+				);
+				expect(encodes, `limit ${limit}`).toBe(decodes);
+			}
+		},
+	);
+
 	it("rejects error responses consistently in buffered and streaming encoding", async () => {
 		const encoder = new BHttpEncoder();
 		await expect(encoder.encodeResponse(Response.error())).rejects.toThrow(

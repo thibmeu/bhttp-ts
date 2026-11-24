@@ -73,6 +73,8 @@ class EncoderContext {
 		arrayBuffer: () => Promise<ArrayBuffer>,
 		encodedSize: (bodySize: number) => number,
 		maxMessageSize: number,
+		metadataSize: number,
+		maxMetadataSize: number,
 	) {
 		const checkSize = () => {
 			const size = encodedSize(this.bodySize);
@@ -81,6 +83,7 @@ class EncoderContext {
 		};
 		let messageSize: number;
 		try {
+			checkMetadataSize(metadataSize, maxMetadataSize);
 			messageSize = checkSize();
 		} catch (error) {
 			try {
@@ -131,7 +134,7 @@ class RequestEncoderContext extends EncoderContext {
 		this.url = requestUrl(request);
 	}
 
-	public async setup(maxMessageSize: number, padding: Padding) {
+	public async setup(maxMessageSize: number, padding: Padding, maxMetadataSize: number) {
 		// Request control data is UTF-8; header fields are opaque octets.
 		this.method = te.encode(this.request.method);
 		this.scheme = te.encode(this.url.protocol.slice(0, this.url.protocol.length - 1));
@@ -143,6 +146,9 @@ class RequestEncoderContext extends EncoderContext {
 			() => this.request.arrayBuffer(),
 			(bodySize) => paddedSize(this.calculateEncodedRequestSize(bodySize), padding),
 			maxMessageSize,
+			// The decoder does not charge the content length prefix (1 byte when empty).
+			this.calculateEncodedRequestSize(0) - 1,
+			maxMetadataSize,
 		);
 		// Setup the output buffer.
 		this.buf = new Uint8Array(size);
@@ -181,7 +187,7 @@ class ResponseEncoderContext extends EncoderContext {
 		this.response = response;
 	}
 
-	public async setup(maxMessageSize: number, padding: Padding) {
+	public async setup(maxMessageSize: number, padding: Padding, maxMetadataSize: number) {
 		// Pre-encode header fields as opaque octets.
 		this.encodeHeaders(this.response.headers);
 		const size = await this.readBody(
@@ -189,6 +195,9 @@ class ResponseEncoderContext extends EncoderContext {
 			() => this.response.arrayBuffer(),
 			(bodySize) => paddedSize(this.calculateEncodedResponseSize(bodySize), padding),
 			maxMessageSize,
+			// The decoder does not charge the content length prefix (1 byte when empty).
+			this.calculateEncodedResponseSize(0) - 1,
+			maxMetadataSize,
 		);
 		// Setup the output buffer.
 		this.buf = new Uint8Array(size);
@@ -220,7 +229,11 @@ export class BHttpEncoder {
 	public async encodeRequest(src: Request, options: BHttpEncoderOptions = {}): Promise<Uint8Array> {
 		// Setup RequestEncoderContext.
 		const ctx = new RequestEncoderContext(src);
-		await ctx.setup(resolveMaxMessageSize(options.maxMessageSize), resolvePadding(options.padding));
+		await ctx.setup(
+			resolveMaxMessageSize(options.maxMessageSize),
+			resolvePadding(options.padding),
+			errors.metadataSizeLimit(options),
+		);
 
 		// Do BHTTP encoding.
 		return this.encodeKnownLengthRequest(ctx);
@@ -235,7 +248,11 @@ export class BHttpEncoder {
 		}
 		// Setup ResponseEncoderContext.
 		const ctx = new ResponseEncoderContext(src);
-		await ctx.setup(resolveMaxMessageSize(options.maxMessageSize), resolvePadding(options.padding));
+		await ctx.setup(
+			resolveMaxMessageSize(options.maxMessageSize),
+			resolvePadding(options.padding),
+			errors.metadataSizeLimit(options),
+		);
 
 		// Do BHTTP encoding.
 		return this.encodeKnownLengthResponse(ctx);
@@ -287,6 +304,7 @@ export class BHttpEncoder {
 	): ReadableStream<Uint8Array> {
 		const padding = resolvePadding(options.padding);
 		const maxMessageSize = resolveMaxMessageSize(options.maxMessageSize);
+		const maxMetadataSize = errors.metadataSizeLimit(options);
 		let size = preamble.length;
 		let remaining = 0;
 		let ended = false;
@@ -314,6 +332,7 @@ export class BHttpEncoder {
 		return new ReadableStream<Uint8Array>({
 			start(controller) {
 				try {
+					checkMetadataSize(preamble.length, maxMetadataSize);
 					checkSize();
 					controller.enqueue(preamble);
 				} catch (error) {
@@ -344,6 +363,8 @@ export class BHttpEncoder {
 						}
 					}
 					const end = encoder.encodeEnd();
+					// The decoder does not charge the 1-byte content terminator.
+					checkMetadataSize(preamble.length + end.length - 1, maxMetadataSize);
 					size += end.length;
 					const padded = checkSize();
 					release();
@@ -452,6 +473,11 @@ export interface BHttpEncoderOptions {
 	 * @default 0
 	 */
 	readonly padding?: Padding;
+	/**
+	 * Maximum encoded non-content bytes, matching the decoder option of the same name.
+	 * @default 65536
+	 */
+	readonly maxMetadataSize?: number;
 }
 
 function resolveMaxMessageSize(value = Number.MAX_SAFE_INTEGER): number {
@@ -465,6 +491,14 @@ function messageLimitExceeded(size: number, limit: number): errors.MessageLimitE
 	return new errors.MessageLimitExceededError(
 		`BHTTP message size ${size} exceeds maxMessageSize ${limit}`,
 	);
+}
+
+function checkMetadataSize(size: number, limit: number) {
+	if (size > limit) {
+		throw new errors.MetadataLimitExceededError(
+			`BHTTP metadata size ${size} exceeds maxMetadataSize ${limit}`,
+		);
+	}
 }
 
 function resolvePadding(value: Padding = 0) {

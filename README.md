@@ -155,6 +155,10 @@ Buffered encoders allocate the full padded message. `maxMessageSize` defaults to
 `Number.MAX_SAFE_INTEGER`, so large padding values can cause large allocations.
 Set an explicit encoded-size limit, for example `{ padding: 1024, maxMessageSize: 1048576 }`.
 
+Encoders also accept `maxMetadataSize`, with the same 64 KiB default as decoders,
+so they never emit a message a default decoder rejects. Exceeding it throws
+`MetadataLimitExceededError` (or errors the stream).
+
 ### BHttpDecoder
 
 - `decodeRequest(data: ArrayBuffer | Uint8Array): Request` - Decode BHTTP to a Request
