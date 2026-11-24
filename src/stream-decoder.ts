@@ -6,7 +6,12 @@
  */
 
 import { type Cursor, tryReadFrom, MAX as VLI_MAX } from "quicvarint";
-import { InvalidMessageError, MetadataLimitExceededError, NotSupportedError } from "./errors";
+import {
+	InvalidMessageError,
+	MetadataLimitExceededError,
+	metadataSizeLimit,
+	NotSupportedError,
+} from "./errors";
 
 const EMPTY = new Uint8Array(0);
 
@@ -80,9 +85,6 @@ export class FieldSection {
 	}
 }
 
-/** Default maximum encoded non-content bytes accepted in one message. */
-export const DEFAULT_MAX_METADATA_SIZE = 64 * 1024;
-
 export interface BHttpStreamDecoderOptions {
 	/**
 	 * Maximum total encoded non-content bytes accepted in one message.
@@ -94,14 +96,6 @@ export interface BHttpStreamDecoderOptions {
 	 * @default 65536
 	 */
 	readonly maxMetadataSize?: number;
-}
-
-export function metadataSizeLimit(options: BHttpStreamDecoderOptions): number {
-	const limit = options.maxMetadataSize ?? DEFAULT_MAX_METADATA_SIZE;
-	if (!Number.isSafeInteger(limit) || limit < 0) {
-		throw new RangeError(`maxMetadataSize must be a non-negative integer, got ${limit}`);
-	}
-	return limit;
 }
 
 export function createFetchStreamDecoder(options: BHttpStreamDecoderOptions): BHttpStreamDecoder {

@@ -20,6 +20,7 @@ describe("BHttpStreamDecoder", () => {
 			new Response(null, {
 				headers: { "x-long": value },
 			}),
+			{ maxMetadataSize: Number.MAX_SAFE_INTEGER },
 		);
 		const maxMetadataSize = bytes.byteLength;
 		if (length > 64 * 1024) {

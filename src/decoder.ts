@@ -9,7 +9,6 @@ import {
 	FieldSection,
 	isBodylessRequest,
 	isBodylessResponse,
-	metadataSizeLimit,
 } from "./stream-decoder";
 
 const EMPTY_CONTENT = new Uint8Array(0);
@@ -86,7 +85,7 @@ export class BHttpDecoder {
 	private readonly _maxMetadataSize: number;
 
 	constructor(options: BHttpStreamDecoderOptions = {}) {
-		this._maxMetadataSize = metadataSizeLimit(options);
+		this._maxMetadataSize = errors.metadataSizeLimit(options);
 	}
 
 	public decodeRequest(src: ArrayBuffer | Uint8Array): Request {
