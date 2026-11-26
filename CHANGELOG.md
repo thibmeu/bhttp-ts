@@ -1,6 +1,8 @@
 # Changes
 
-## Unreleased
+## Version 0.7.1
+
+Released 2026-11-26
 
 ### Fixed
 
