@@ -5,6 +5,7 @@ import { BHttpEncoder } from "../src/encoder";
 import { InvalidMessageError, NotSupportedError } from "../src/errors";
 import { BHttpStreamDecoder } from "../src/stream-decoder";
 import { encodeVli } from "../src/vli";
+import { hexStringToBytes } from "./utils";
 
 describe("response status validation", () => {
 	it.each([1, 3])("rejects invalid final statuses before parsing framing %i headers", (framing) => {
@@ -214,6 +215,75 @@ describe("BHttpDecoder/Encoder", () => {
 			expect(req.method).toBe("POST");
 			expect(req.headers.has("content-type")).toBe(false);
 			expect(await req.text()).toBe("");
+		});
+	});
+
+	// RFC 9458 Appendix A sends both messages with the empty header section
+	// omitted too. martinthomson/ohttp decodes them; so must we.
+	describe("omitted header section (RFC 9458 Appendix A)", () => {
+		const rfcRequest = hexStringToBytes("00034745540568747470730b6578616d706c652e636f6d012f");
+		const rfcResponse = hexStringToBytes("0140c8");
+		// Same messages with the indeterminate-length framing indicator.
+		const indeterminateRequest = hexStringToBytes(
+			"02034745540568747470730b6578616d706c652e636f6d012f",
+		);
+		const indeterminateResponse = hexStringToBytes("0340c8");
+		const stream = (bytes: Uint8Array) => new Blob([bytes]).stream();
+
+		it.each([
+			["known", rfcRequest],
+			["indeterminate", indeterminateRequest],
+		])("decodes the %s-length request", async (_, bytes) => {
+			const decoder = new BHttpDecoder();
+			for (const req of [
+				decoder.decodeRequest(bytes),
+				await decoder.decodeRequestStream(stream(bytes)),
+			]) {
+				expect(req.method).toBe("GET");
+				expect(req.url).toBe("https://example.com/");
+				expect([...req.headers]).toEqual([]);
+				expect(req.body).toBeNull();
+			}
+		});
+
+		it.each([
+			["known", rfcResponse],
+			["indeterminate", indeterminateResponse],
+		])("decodes the %s-length response", async (_, bytes) => {
+			const decoder = new BHttpDecoder();
+			for (const res of [
+				decoder.decodeResponse(bytes),
+				await decoder.decodeResponseStream(stream(bytes)),
+			]) {
+				expect(res.status).toBe(200);
+				expect([...res.headers]).toEqual([]);
+				expect(await res.text()).toBe("");
+			}
+		});
+
+		it("emits the preamble from end() in the event decoder", () => {
+			const decoder = new BHttpStreamDecoder();
+			expect(decoder.push(rfcResponse)).toEqual([]);
+			expect(decoder.end()).toEqual([
+				{ type: "response-preamble", status: 200, headers: new Headers() },
+				{ type: "end" },
+			]);
+		});
+
+		it.each([
+			// Header section length 2 with no bytes after it.
+			["known-length section length without bytes", "0140c802"],
+			// Field name "a" with no value and no terminator.
+			["indeterminate-length name without value", "0340c80161"],
+			// Final status missing after a 1xx with omitted fields.
+			["informational without final status", "014064"],
+		])("still rejects %s", async (_, hex) => {
+			const bytes = hexStringToBytes(hex);
+			const decoder = new BHttpDecoder();
+			expect(() => decoder.decodeResponse(bytes)).toThrow(InvalidMessageError);
+			await expect(decoder.decodeResponseStream(stream(bytes))).rejects.toThrow(
+				InvalidMessageError,
+			);
 		});
 	});
 });

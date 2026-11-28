@@ -1,6 +1,6 @@
 import { MAX as VLI_MAX, MIN as VLI_MIN, length as vliLength, writeTo } from "quicvarint";
 import * as errors from "./errors";
-import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder } from "./stream-encoder";
+import { BHttpRequestStreamEncoder, BHttpResponseStreamEncoder, trimOws } from "./stream-encoder";
 
 // Request control data uses UTF-8. Header fields use opaque ByteString octets.
 const te = new TextEncoder();
@@ -62,7 +62,7 @@ class EncoderContext {
 		this.headerSize = 0;
 		headers.forEach((value, key) => {
 			const k = encodeByteString(key);
-			const v = encodeByteString(value);
+			const v = encodeByteString(trimOws(value));
 			this.headerPairs.push([k, v]);
 			this.headerSize += this.fieldSize(k) + this.fieldSize(v);
 		});

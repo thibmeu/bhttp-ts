@@ -209,6 +209,7 @@ export class BHttpDecoder {
 
 	private decodeFields(ctx: DecoderContext, knownLength: boolean): Headers {
 		const fields = new FieldSection();
+		if (this.isAtEnd(ctx)) return fields.finish();
 		if (knownLength) {
 			const start = ctx.p;
 			const len = this.decodeVli(ctx);
@@ -396,8 +397,8 @@ async function decodeStream(
 	try {
 		while (preamble === undefined) {
 			const { done, value } = await reader.read();
-			if (done) throw new errors.InvalidMessageError("Missing BHTTP preamble");
-			for (const event of decoder.push(value)) {
+			// end() emits the preamble when the input stops at an omitted header section.
+			for (const event of done ? decoder.end() : decoder.push(value)) {
 				if (event.type === "content") pending.push(event.data);
 				else if (event.type === "request-preamble" && kind === "request") {
 					preamble = {
@@ -412,6 +413,9 @@ async function decodeStream(
 				} else if (event.type === "request-preamble" || event.type === "response-preamble") {
 					throw new errors.InvalidMessageError(`Expected a BHTTP ${kind}`);
 				}
+			}
+			if (done && preamble === undefined) {
+				throw new errors.InvalidMessageError("Missing BHTTP preamble");
 			}
 		}
 	} catch (error) {

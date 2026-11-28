@@ -720,7 +720,11 @@ describe("repeated fields and bodyless responses", () => {
 		[3, "x-test", "value\n"],
 		[3, "cookie", "key=value\r"],
 		[1, "cookie", "key=\0value"],
-	])("rejects raw control bytes in framing %i field %s", (framing, name, value) => {
+		[1, "x-test", " value"],
+		[3, "x-test", "value\t"],
+		[1, "cookie", " a=1 "],
+		[3, "cookie", "\tb=2\t"],
+	])("rejects control bytes or edge whitespace in framing %i field %s", (framing, name, value) => {
 		const fields = field(name, value);
 		const section = framing === 1 ? [...encodeVli(fields.length), ...fields] : [...fields, 0];
 		const bytes = Uint8Array.of(framing, ...encodeVli(200), ...section);
@@ -754,8 +758,8 @@ describe("repeated fields and bodyless responses", () => {
 			...field("set-cookie", "b=2"),
 			...field("x", "a"),
 			...field("x", "b"),
-			...field("cookie", " a=1 "),
-			...field("cookie", "\tb=2\t"),
+			...field("cookie", "a=1"),
+			...field("cookie", "b=2"),
 		];
 		const section = framing === 1 ? [...encodeVli(fields.length), ...fields] : [...fields, 0];
 		const bytes = new Uint8Array([

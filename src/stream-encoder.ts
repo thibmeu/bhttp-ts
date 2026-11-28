@@ -25,6 +25,15 @@ function encodeByteString(value: string): Uint8Array {
 	return bytes;
 }
 
+// Fetch joins repeated fields with ", ", so an empty repeat leaves a trailing SP
+// that RFC 9292 Section 3.6 forbids on the wire. Decoders reject it, so strip it.
+const isOws = (code: number) => code === 0x20 || code === 0x09;
+// The regex runs only for the rare edge-whitespace value, so the common case allocates nothing.
+export const trimOws = (value: string): string =>
+	isOws(value.charCodeAt(0)) || isOws(value.charCodeAt(value.length - 1))
+		? value.replace(/^[ \t]+|[ \t]+$/g, "")
+		: value;
+
 /**
  * Encode a string with VLI length prefix.
  */
@@ -57,7 +66,7 @@ function encodeIndeterminateHeaders(headers: Headers): Uint8Array {
 
 	headers.forEach((value, name) => {
 		const nameBytes = encodeVliByteString(name);
-		const valueBytes = encodeVliByteString(value);
+		const valueBytes = encodeVliByteString(trimOws(value));
 		parts.push(nameBytes, valueBytes);
 		totalLen += nameBytes.length + valueBytes.length;
 	});

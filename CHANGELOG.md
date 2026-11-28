@@ -1,5 +1,17 @@
 # Changes
 
+## Unreleased
+
+### Fixed
+
+- Decoders accept a message that ends after its control data, omitting an empty
+  header section along with the content and trailers. RFC 9458 Appendix A does
+  this, and martinthomson/ohttp accepts it.
+- Field values with leading or trailing SP or HTAB are rejected as RFC 9292
+  Section 3.6 requires. They used to be trimmed, Cookie included. Encoders
+  strip them instead, since Fetch leaves a trailing SP when it joins a repeated
+  field with an empty value.
+
 ## Version 0.7.1
 
 Released 2026-11-26

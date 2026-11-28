@@ -12,6 +12,7 @@ import {
 	metadataSizeLimit,
 	NotSupportedError,
 } from "./errors";
+import { trimOws } from "./stream-encoder";
 
 const EMPTY = new Uint8Array(0);
 
@@ -54,13 +55,18 @@ export class FieldSection {
 		if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) {
 			throw new InvalidMessageError("Invalid field name");
 		}
-		if (value.includes("\0") || value.includes("\r") || value.includes("\n")) {
+		// RFC 9292 Section 3.6 applies RFC 9113 Section 8.2.1, which also rejects
+		// leading and trailing SP or HTAB. Fetch would silently trim them.
+		if (
+			value.includes("\0") ||
+			value.includes("\r") ||
+			value.includes("\n") ||
+			trimOws(value) !== value
+		) {
 			throw new InvalidMessageError("Invalid field value");
 		}
 		try {
 			if (name.length === 6 && name.toLowerCase() === "cookie") {
-				// Match Fetch's normalization for each field before combining them.
-				value = value.replace(/^[ \t]+|(?<![ \t])[ \t]+$/g, "");
 				this.cookies ??= [];
 				this.cookies.push(value);
 			} else {
@@ -324,21 +330,27 @@ export class BHttpStreamDecoder {
 		}
 
 		// RFC 9292 Section 3.8 lets the encoder drop an empty trailer section, plus
-		// an empty content section when the trailers are dropped too. So if the
-		// input ends while we are still waiting on the content or trailer section
-		// and never read its length or terminator, treat it as empty and finish.
-		// Anything cut off earlier (mid control data or headers) is invalid and
-		// still throws below, and so does a section that started reading its length
-		// but never delivered the bytes.
+		// an empty content section when the trailers are dropped too. RFC 9458
+		// Appendix A also drops the header section after them, which
+		// martinthomson/ohttp accepts. So if the input ends while we are still
+		// waiting on one of these sections and never read its length or
+		// terminator, treat it as empty and finish. Anything cut off earlier (mid
+		// control data) is invalid and still throws below, and so does a section
+		// that started reading its length but never delivered the bytes.
+		const atHeaders = this._phase === "headers-known" || this._phase === "headers-indeterminate";
 		const atIndeterminateBoundary =
 			(this._phase === "content-indeterminate" && !this._contentStarted) ||
-			(this._phase === "trailers-indeterminate" &&
+			((this._phase === "headers-indeterminate" || this._phase === "trailers-indeterminate") &&
 				this._pendingHeaderName === null &&
 				this._fields.empty);
 		const atKnownBoundary =
-			(this._phase === "content-known" || this._phase === "trailers-known") &&
+			(this._phase === "headers-known" ||
+				this._phase === "content-known" ||
+				this._phase === "trailers-known") &&
 			!this._knownSectionLenRead;
+		let preamble: BHttpEvent | undefined;
 		if ((atIndeterminateBoundary || atKnownBoundary) && this._offset === this._buffer.length) {
+			if (atHeaders) preamble = this._emitPreambleEvent();
 			this._phase = "padding";
 		}
 
@@ -346,7 +358,7 @@ export class BHttpStreamDecoder {
 		if (this._phase === "padding") {
 			this._discardPadding();
 			this._phase = "done";
-			return [{ type: "end" }];
+			return preamble ? [preamble, { type: "end" }] : [{ type: "end" }];
 		}
 
 		throw new InvalidMessageError("Incomplete message");
